@@ -108,10 +108,23 @@ def inject_styles() -> None:
     st.markdown(GLOBAL_STYLES, unsafe_allow_html=True)
 
 
-def query_rag_api(query: str, top_k: int) -> dict:
+def _parse_year_input(raw_value: str) -> int | None:
+    value = raw_value.strip()
+    if not value:
+        return None
+    if not value.isdigit():
+        return None
+    year = int(value)
+    if 1900 <= year <= 2100:
+        return year
+    return None
+
+
+def query_rag_api(query: str, top_k: int, filters: dict) -> dict:
+    payload = {"query": query, "top_k": top_k, **filters}
     response = requests.post(
         QUERY_URL,
-        json={"query": query, "top_k": top_k},
+        json=payload,
         timeout=60,
     )
     response.raise_for_status()
@@ -130,7 +143,7 @@ def render_header() -> None:
     )
 
 
-def render_query_form() -> tuple[str, int, bool]:
+def render_query_form() -> tuple[str, int, dict, bool]:
     with st.form("query-form", clear_on_submit=False):
         st.markdown('<div class="query-label">Ask a question</div>', unsafe_allow_html=True)
         query = st.text_input(
@@ -139,8 +152,29 @@ def render_query_form() -> tuple[str, int, bool]:
             label_visibility="collapsed",
         )
         top_k = st.slider("Sources to retrieve", min_value=MIN_TOP_K, max_value=MAX_TOP_K, value=DEFAULT_TOP_K)
+        categories_raw = st.text_input(
+            "Categories (comma-separated, e.g. cs.CL, cs.AI)",
+            placeholder="cs.CL, cs.AI",
+        )
+        authors_raw = st.text_input(
+            "Author keywords (comma-separated, optional)",
+            placeholder="Yann LeCun, Geoffrey Hinton",
+        )
+        year_col_min, year_col_max = st.columns(2)
+        with year_col_min:
+            year_min_raw = st.text_input("Year from (optional)", placeholder="2019")
+        with year_col_max:
+            year_max_raw = st.text_input("Year to (optional)", placeholder="2024")
         ask_clicked = st.form_submit_button("Search")
-    return query, top_k, ask_clicked
+    year_min = _parse_year_input(year_min_raw)
+    year_max = _parse_year_input(year_max_raw)
+    filters = {
+        "categories": [value.strip() for value in categories_raw.split(",") if value.strip()],
+        "authors": [value.strip() for value in authors_raw.split(",") if value.strip()],
+        "year_min": year_min,
+        "year_max": year_max,
+    }
+    return query, top_k, filters, ask_clicked
 
 
 def _chunk_confidence(chunk: dict) -> tuple[str, str]:
@@ -175,18 +209,50 @@ def render_result(result: dict) -> None:
             unsafe_allow_html=True,
         )
 
+    facets = result.get("facets", {})
+    if facets:
+        st.markdown("<h2>Facets</h2>", unsafe_allow_html=True)
+        facet_lines = []
+        top_years = facets.get("years", [])[:5]
+        top_categories = facets.get("categories", [])[:5]
+        top_authors = facets.get("authors", [])[:5]
+        if top_years:
+            facet_lines.append(
+                "Years: " + ", ".join(f"{item['value']} ({item['count']})" for item in top_years)
+            )
+        if top_categories:
+            facet_lines.append(
+                "Categories: " + ", ".join(f"{item['value']} ({item['count']})" for item in top_categories)
+            )
+        if top_authors:
+            facet_lines.append(
+                "Authors: " + ", ".join(f"{item['value']} ({item['count']})" for item in top_authors)
+            )
+        for line in facet_lines:
+            st.markdown(f'<div class="source-meta">{line}</div>', unsafe_allow_html=True)
+
     st.markdown("<h2>Sources</h2>", unsafe_allow_html=True)
     for chunk in result.get("context_chunks", []):
         metadata = chunk.get("metadata", {})
         title = metadata.get("title", "Untitled")
         source = metadata.get("source", "Unknown")
+        year = metadata.get("year")
+        categories = ", ".join(metadata.get("categories", []))
+        authors = ", ".join(metadata.get("authors", [])[:3])
         text = chunk.get("text", "")
         score_value, score_band = _chunk_confidence(chunk)
+        metadata_segments = [f"Source: {source}"]
+        if year:
+            metadata_segments.append(f"Year: {year}")
+        if categories:
+            metadata_segments.append(f"Categories: {categories}")
+        if authors:
+            metadata_segments.append(f"Authors: {authors}")
         st.markdown(
             (
                 '<div class="source-card">'
                 f"<h3>{title}</h3>"
-                f'<div class="source-meta">Source: {source}</div>'
+                f'<div class="source-meta">{" | ".join(metadata_segments)}</div>'
                 f'<div class="source-score">Relevance: {score_value} ({score_band})</div>'
                 f'<div class="chunk-text">{text}</div>'
                 "</div>"
@@ -211,15 +277,21 @@ def main() -> None:
     result = None
     error = None
 
-    query, top_k, ask_clicked = render_query_form()
+    query, top_k, filters, ask_clicked = render_query_form()
 
     if ask_clicked:
         if not query.strip():
             error = "Please enter a question first."
+        elif (
+            filters.get("year_min") is not None
+            and filters.get("year_max") is not None
+            and filters["year_min"] > filters["year_max"]
+        ):
+            error = "Year from must be less than or equal to Year to."
         else:
             try:
                 with st.spinner("Searching..."):
-                    result = query_rag_api(query.strip(), top_k)
+                    result = query_rag_api(query.strip(), top_k, filters)
             except requests.exceptions.RequestException as exc:
                 error = (
                     "Could not reach backend API. Make sure `python main.py` is running "

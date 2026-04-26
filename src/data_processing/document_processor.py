@@ -1,5 +1,6 @@
 import os
 import json
+from datetime import datetime
 from typing import List, Dict, Any, Iterator
 from pathlib import Path
 
@@ -89,12 +90,17 @@ class DocumentProcessor:
 
     def _build_document(self, data: Dict[str, Any], file_path: Path) -> Dict[str, Any]:
         """Normalize a raw source record into the internal document schema."""
+        authors = self._normalize_authors(data.get("authors", []))
+        categories = self._normalize_categories(data.get("categories", []))
+        year = self._extract_year(data)
+
         return {
             "id": data.get("id", ""),
             "title": data.get("title", ""),
             "abstract": data.get("abstract", ""),
-            "authors": data.get("authors", []),
-            "categories": data.get("categories", []),
+            "authors": authors,
+            "categories": categories,
+            "year": year,
             "text": data.get("abstract", ""),
             "source": str(file_path),
         }
@@ -132,7 +138,8 @@ class DocumentProcessor:
                         "chunk_index": i,
                         "source": doc.get("source", ""),
                         "authors": doc.get("authors", []),
-                        "categories": doc.get("categories", [])
+                        "categories": doc.get("categories", []),
+                        "year": doc.get("year"),
                     }
                 }
                 chunks.append(chunk)
@@ -195,6 +202,60 @@ class DocumentProcessor:
         # This is a placeholder - actual embedding happens in the embedding module
         print(f"Prepared {len(chunks)} chunks for embedding")
         return chunks
+
+    def _normalize_authors(self, authors: Any) -> List[str]:
+        """Normalize authors into a list of clean names."""
+        if isinstance(authors, list):
+            return [str(author).strip() for author in authors if str(author).strip()]
+        if isinstance(authors, str):
+            return [name.strip() for name in authors.split(" and ") if name.strip()]
+        return []
+
+    def _normalize_categories(self, categories: Any) -> List[str]:
+        """Normalize categories into a list of category codes."""
+        if isinstance(categories, list):
+            return [str(category).strip() for category in categories if str(category).strip()]
+        if isinstance(categories, str):
+            return [category.strip() for category in categories.split() if category.strip()]
+        return []
+
+    def _extract_year(self, data: Dict[str, Any]) -> int | None:
+        """Extract publication year from arXiv metadata fields."""
+        date_candidates: List[str] = []
+        update_date = data.get("update_date")
+        if isinstance(update_date, str):
+            date_candidates.append(update_date)
+
+        versions = data.get("versions", [])
+        if isinstance(versions, list):
+            for version in versions:
+                if not isinstance(version, dict):
+                    continue
+                created = version.get("created")
+                if isinstance(created, str):
+                    date_candidates.append(created)
+
+        for date_value in date_candidates:
+            year = self._parse_year(date_value)
+            if year is not None:
+                return year
+        return None
+
+    def _parse_year(self, date_value: str) -> int | None:
+        """Parse a year from known arXiv date formats."""
+        if not date_value:
+            return None
+        date_value = date_value.strip()
+        for fmt in ("%Y-%m-%d", "%d %b %Y", "%a, %d %b %Y %H:%M:%S %Z"):
+            try:
+                return datetime.strptime(date_value, fmt).year
+            except ValueError:
+                continue
+
+        # Fallback for timestamps like "2007-05-23T17:46:05Z"
+        if len(date_value) >= 4 and date_value[:4].isdigit():
+            return int(date_value[:4])
+        return None
     
     def save_processed_chunks(self, chunks: List[Dict[str, Any]], output_dir: str) -> None:
         """

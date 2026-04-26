@@ -2,8 +2,8 @@
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from pydantic import BaseModel, Field, model_validator
+from typing import List, Dict, Any, Optional
 import os
 import time
 import logging
@@ -15,11 +15,22 @@ class QueryRequest(BaseModel):
     """Request model for query endpoint"""
     query: str
     top_k: int = Field(default=8, ge=1, le=50)
+    authors: List[str] = Field(default_factory=list)
+    categories: List[str] = Field(default_factory=list)
+    year_min: Optional[int] = Field(default=None, ge=1900, le=2100)
+    year_max: Optional[int] = Field(default=None, ge=1900, le=2100)
+
+    @model_validator(mode="after")
+    def validate_year_range(self):
+        if self.year_min is not None and self.year_max is not None and self.year_min > self.year_max:
+            raise ValueError("year_min must be less than or equal to year_max")
+        return self
 
 class QueryResponse(BaseModel):
     """Response model for query endpoint"""
     answer: str
     context_chunks: List[Dict[str, Any]]
+    facets: Dict[str, Any]
     query: str
     rewritten_query: str
 
@@ -28,7 +39,7 @@ class APIServer:
     FastAPI server for the RAG application.
     """
     
-    def __init__(self, embedding_model, vector_store, llm_interface):
+    def __init__(self, embedding_model, vector_store, llm_interface, reranker=None):
         """Initialize the API server with injected components"""
         self.app = FastAPI(
             title="ArxivLens API",
@@ -40,6 +51,7 @@ class APIServer:
         self.embedding_model = embedding_model
         self.vector_store = vector_store
         self.llm_interface = llm_interface
+        self.reranker = reranker
 
         # Register routes
         self._register_routes()
@@ -73,9 +85,25 @@ class APIServer:
                 context_chunks = self.vector_store.query(
                     query_embedding=query_embedding,
                     query_text=rewritten_query,
-                    n_results=effective_top_k
+                    n_results=effective_top_k,
+                    filters={
+                        "authors": request.authors,
+                        "categories": request.categories,
+                        "year_min": request.year_min,
+                        "year_max": request.year_max,
+                    },
                 )
                 retrieval_elapsed = time.perf_counter() - retrieval_started_at
+
+                rerank_started_at = time.perf_counter()
+                if self.reranker is not None:
+                    context_chunks = self.reranker.rerank(
+                        query_text=rewritten_query,
+                        candidates=context_chunks,
+                        final_top_k=effective_top_k,
+                    )
+                rerank_elapsed = time.perf_counter() - rerank_started_at
+                facets = self.vector_store.get_facets(context_chunks)
 
                 # Generate response
                 generation_started_at = time.perf_counter()
@@ -86,17 +114,19 @@ class APIServer:
                 generation_elapsed = time.perf_counter() - generation_started_at
                 total_elapsed = time.perf_counter() - started_at
                 logger.info(
-                    "Query served in %.2fs (rewrite=%.2fs, embed=%.2fs, retrieval=%.2fs, generation=%.2fs)",
+                    "Query served in %.2fs (rewrite=%.2fs, embed=%.2fs, retrieval=%.2fs, rerank=%.2fs, generation=%.2fs)",
                     total_elapsed,
                     rewrite_elapsed,
                     embed_elapsed,
                     retrieval_elapsed,
+                    rerank_elapsed,
                     generation_elapsed,
                 )
 
                 return {
                     "answer": answer,
                     "context_chunks": context_chunks,
+                    "facets": facets,
                     "query": request.query,
                     "rewritten_query": rewritten_query,
                 }
