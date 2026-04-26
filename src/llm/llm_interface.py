@@ -14,14 +14,15 @@ class LLMInterface:
     Interface for interacting with Large Language Models (LLMs).
     """
 
-    def __init__(self, model_name: str = None):
+    def __init__(self, model_name: Optional[str] = None):
         """
         Initialize the LLM interface.
 
         Args:
             model_name: Name of the LLM model to use
         """
-        self.model_name = model_name or os.getenv("LLM_MODEL_NAME", "gpt-3.5-turbo")
+        self.model_name = model_name or os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+        self.rewrite_model_name = os.getenv("QUERY_REWRITE_MODEL", self.model_name)
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.api_base = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
         
@@ -36,6 +37,42 @@ class LLMInterface:
         prompt = self._create_prompt(query, formatted_context)
         response = self._call_llm_api(prompt)
         return response
+
+    def rewrite_query(self, query: str) -> str:
+        """
+        Rewrite the user query into a retrieval-optimized version.
+        Falls back to the original query if rewrite is disabled or fails.
+        """
+        if not query.strip():
+            return query
+
+        if os.getenv("ENABLE_QUERY_REWRITE", "true").lower() != "true":
+            return query
+
+        rewrite_prompt = (
+            "Rewrite the user query for retrieval in a scientific paper RAG system.\n"
+            "Preserve intent, add key technical terms, and keep it concise.\n"
+            "Return only the rewritten query on a single line.\n\n"
+            f"User query: {query}\n"
+            "Rewritten query:"
+        )
+
+        try:
+            rewritten = self._call_llm_api(
+                prompt=rewrite_prompt,
+                system_message=(
+                    "You rewrite search queries for document retrieval. "
+                    "Do not answer the question."
+                ),
+                temperature=0.0,
+                max_tokens=64,
+                model_name=self.rewrite_model_name,
+            )
+            rewritten = rewritten.strip().replace("\n", " ")
+            return rewritten or query
+        except Exception as e:
+            logger.warning(f"Query rewrite failed, using original query: {e}")
+            return query
 
     def _format_context(self, context_chunks: List[Dict[str, Any]]) -> str:
         """
@@ -71,7 +108,14 @@ Please answer the query based only on the provided context. If the context doesn
 ANSWER:
 """
 
-    def _call_llm_api(self, prompt: str) -> str:
+    def _call_llm_api(
+        self,
+        prompt: str,
+        system_message: Optional[str] = None,
+        temperature: float = 0.3,
+        max_tokens: int = 1000,
+        model_name: Optional[str] = None,
+    ) -> str:
         """
         Call the LLM API with the prompt.
         """
@@ -86,13 +130,17 @@ ANSWER:
         }
 
         data = {
-            "model": self.model_name,
+            "model": model_name or self.model_name,
             "messages": [
-                {"role": "system", "content": "You are a helpful assistant that answers questions based on provided context."},
+                {
+                    "role": "system",
+                    "content": system_message
+                    or "You are a helpful assistant that answers questions based on provided context.",
+                },
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.3,
-            "max_tokens": 1000
+            "temperature": temperature,
+            "max_tokens": max_tokens
         }
 
         try:

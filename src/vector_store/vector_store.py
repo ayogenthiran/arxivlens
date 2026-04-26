@@ -2,9 +2,11 @@
 
 import os
 import logging
+import re
 from typing import List, Dict, Any, Optional
 import numpy as np
 import chromadb
+from rank_bm25 import BM25Okapi
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +29,9 @@ class VectorStore:
         self.collection_name = collection_name
         self.client = None
         self.collection = None
+        self._bm25 = None
+        self._bm25_doc_ids: List[str] = []
+        self._bm25_docs: List[str] = []
 
     def initialize(self):
         """
@@ -85,17 +90,74 @@ class VectorStore:
                 documents=documents,
                 metadatas=metadatas
             )
+            # Keep BM25 index in sync with newly added chunks.
+            self._bm25 = None
+            self._bm25_doc_ids = []
+            self._bm25_docs = []
             logger.info(f"Added {len(chunks)} chunks to vector store")
         except Exception as e:
             logger.error(f"Error adding embeddings to vector store: {e}")
             raise
 
-    def query(self, query_embedding: np.ndarray, n_results: int = 5) -> List[Dict[str, Any]]:
+    def _tokenize(self, text: str) -> List[str]:
+        return re.findall(r"\w+", text.lower())
+
+    def _ensure_bm25_index(self) -> None:
+        if self.collection is None:
+            self.initialize()
+        if self._bm25 is not None:
+            return
+
+        try:
+            all_docs = self.collection.get(include=["documents"])
+            ids = all_docs.get("ids", [])
+            documents = all_docs.get("documents", [])
+            if not ids or not documents:
+                self._bm25 = None
+                self._bm25_doc_ids = []
+                self._bm25_docs = []
+                return
+
+            tokenized_corpus = [self._tokenize(doc or "") for doc in documents]
+            self._bm25 = BM25Okapi(tokenized_corpus)
+            self._bm25_doc_ids = ids
+            self._bm25_docs = documents
+        except Exception as e:
+            logger.warning(f"BM25 index initialization failed; falling back to vector-only search: {e}")
+            self._bm25 = None
+            self._bm25_doc_ids = []
+            self._bm25_docs = []
+
+    def _vector_search(self, query_embedding: np.ndarray | List[float], n_results: int) -> List[Dict[str, Any]]:
+        if isinstance(query_embedding, np.ndarray):
+            query_embedding = query_embedding.tolist()
+
+        results = self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_results
+        )
+
+        formatted_results = []
+        for i in range(len(results["ids"][0])):
+            distance = results.get("distances", [[]])[0][i] if "distances" in results else None
+            vector_score = 1.0 / (1.0 + distance) if distance is not None else 0.0
+            formatted_results.append({
+                "id": results["ids"][0][i],
+                "text": results["documents"][0][i],
+                "metadata": results["metadatas"][0][i],
+                "distance": distance,
+                "vector_score": vector_score,
+                "bm25_score": 0.0,
+            })
+        return formatted_results
+
+    def query(self, query_embedding: np.ndarray, query_text: Optional[str] = None, n_results: int = 5) -> List[Dict[str, Any]]:
         """
-        Query the vector store for similar documents.
+        Query the vector store for similar documents using hybrid retrieval.
 
         Args:
             query_embedding: Query embedding vector
+            query_text: Original user query for BM25 lexical retrieval
             n_results: Number of results to return
 
         Returns:
@@ -104,27 +166,62 @@ class VectorStore:
         if self.collection is None:
             self.initialize()
 
-        if isinstance(query_embedding, np.ndarray):
-            query_embedding = query_embedding.tolist()
-
         try:
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=n_results
-            )
+            vector_results = self._vector_search(query_embedding=query_embedding, n_results=n_results * 3)
         except Exception as e:
             logger.error(f"Error querying vector store: {e}")
             raise
 
-        formatted_results = []
-        for i in range(len(results["ids"][0])):
-            result = {
-                "id": results["ids"][0][i],
-                "text": results["documents"][0][i],
-                "metadata": results["metadatas"][0][i],
-                "distance": results.get("distances", [[]])[0][i] if "distances" in results else None
-            }
-            formatted_results.append(result)
+        # If no query text is available, return vector-only retrieval.
+        if not query_text:
+            formatted_results = vector_results[:n_results]
+            logger.info(f"Vector-only query returned {len(formatted_results)} results")
+            return formatted_results
 
-        logger.info(f"Query returned {len(formatted_results)} results")
+        self._ensure_bm25_index()
+        if self._bm25 is None or not self._bm25_doc_ids:
+            formatted_results = vector_results[:n_results]
+            logger.info(f"Vector-only fallback returned {len(formatted_results)} results")
+            return formatted_results
+
+        bm25_scores = self._bm25.get_scores(self._tokenize(query_text))
+        if len(bm25_scores) == 0:
+            formatted_results = vector_results[:n_results]
+            logger.info(f"Vector-only fallback returned {len(formatted_results)} results")
+            return formatted_results
+
+        bm25_score_min = float(np.min(bm25_scores))
+        bm25_score_max = float(np.max(bm25_scores))
+        bm25_denom = (bm25_score_max - bm25_score_min) if bm25_score_max > bm25_score_min else 1.0
+
+        top_bm25_idx = np.argsort(bm25_scores)[::-1][: n_results * 3]
+        hybrid_candidates: Dict[str, Dict[str, Any]] = {item["id"]: item for item in vector_results}
+
+        for idx in top_bm25_idx:
+            chunk_id = self._bm25_doc_ids[int(idx)]
+            score_raw = float(bm25_scores[int(idx)])
+            score_norm = (score_raw - bm25_score_min) / bm25_denom
+            if chunk_id in hybrid_candidates:
+                hybrid_candidates[chunk_id]["bm25_score"] = score_norm
+                continue
+
+            doc_text = self._bm25_docs[int(idx)]
+            hybrid_candidates[chunk_id] = {
+                "id": chunk_id,
+                "text": doc_text,
+                "metadata": {},
+                "distance": None,
+                "vector_score": 0.0,
+                "bm25_score": score_norm,
+            }
+
+        alpha = float(os.getenv("HYBRID_VECTOR_WEIGHT", "0.7"))
+        alpha = min(max(alpha, 0.0), 1.0)
+        for item in hybrid_candidates.values():
+            item["hybrid_score"] = (alpha * item.get("vector_score", 0.0)) + ((1.0 - alpha) * item.get("bm25_score", 0.0))
+
+        ranked = sorted(hybrid_candidates.values(), key=lambda x: x.get("hybrid_score", 0.0), reverse=True)
+        formatted_results = ranked[:n_results]
+
+        logger.info(f"Hybrid query returned {len(formatted_results)} results")
         return formatted_results

@@ -10,3 +10,4 @@ numpy==2.2.5
 chromadb==1.0.7
 posthog==3.25.0
 sentence-transformers==4.1.0
+rank-bm25==0.2.2

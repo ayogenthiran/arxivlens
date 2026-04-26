@@ -17,6 +17,7 @@ class QueryResponse(BaseModel):
     answer: str
     context_chunks: List[Dict[str, Any]]
     query: str
+    rewritten_query: str
 
 class APIServer:
     """
@@ -52,12 +53,15 @@ class APIServer:
         @self.app.post("/api/query", response_model=QueryResponse)
         async def query(request: QueryRequest):
             try:
+                rewritten_query = self.llm_interface.rewrite_query(request.query)
+
                 # Generate query embedding
-                query_embedding = self.embedding_model.embed_query(request.query)
+                query_embedding = self.embedding_model.embed_query(rewritten_query)
 
                 # Retrieve relevant chunks
                 context_chunks = self.vector_store.query(
                     query_embedding=query_embedding,
+                    query_text=rewritten_query,
                     n_results=request.top_k
                 )
 
@@ -70,7 +74,8 @@ class APIServer:
                 return {
                     "answer": answer,
                     "context_chunks": context_chunks,
-                    "query": request.query
+                    "query": request.query,
+                    "rewritten_query": rewritten_query,
                 }
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
