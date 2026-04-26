@@ -16,6 +16,7 @@ from src.data_processing import DocumentProcessor
 from src.embeddings import EmbeddingModel
 from src.vector_store import VectorStore
 from src.llm import LLMInterface
+from src.reranker import CrossEncoderReranker
 from src.api.server import APIServer  # Correct import (from server.py)
 
 
@@ -75,6 +76,7 @@ def main():
     embedding_model = EmbeddingModel()
     vector_store = VectorStore(persist_directory=os.getenv("VECTOR_STORE_DIR", "data/vector_store"))
     llm_interface = LLMInterface()
+    reranker = CrossEncoderReranker()
 
     # Handle command-line arguments
     args = sys.argv[1:]
@@ -199,7 +201,8 @@ def main():
     api_server = APIServer(
         embedding_model=embedding_model,
         vector_store=vector_store,
-        llm_interface=llm_interface
+        llm_interface=llm_interface,
+        reranker=reranker,
     )
     
     host = os.getenv("HOST", "0.0.0.0")

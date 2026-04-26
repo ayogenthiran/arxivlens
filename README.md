@@ -11,6 +11,7 @@ This repository implements a complete RAG pipeline with a user-friendly web inte
 - **Document Processing Pipeline**: Ingest, chunk, and embed documents from various sources
 - **Vector Database Integration**: Store and efficiently query document embeddings
 - **Semantic Search**: Find the most relevant context for user queries
+- **Cross-Encoder Reranking**: Re-rank retrieved chunks after retrieval for better precision
 - **LLM Integration**: Generate contextually accurate responses using retrieved information
 - **Web Interface**: User-friendly UI for interacting with the RAG system
 - **API Endpoints**: RESTful API for programmatic access to the RAG pipeline
@@ -86,6 +87,9 @@ OPENAI_API_KEY=your-openai-key-here
 OPENAI_API_BASE=https://api.openai.com/v1
 MAX_QUERY_TOP_K=20
 HYBRID_BM25_MAX_DOCS=50000
+ENABLE_RERANKER=true
+RERANKER_MODEL_NAME=cross-encoder/ms-marco-MiniLM-L-6-v2
+RERANKER_MAX_CANDIDATES=24
 UI_DEFAULT_TOP_K=8
 UI_MIN_TOP_K=3
 UI_MAX_TOP_K=20
