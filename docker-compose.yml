@@ -1,0 +1,59 @@
+services:
+  api:
+    image: arxivlens-app:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arxivlens-api
+    command: python main.py
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /app/data/raw
+      OUTPUT_DIR: /app/data/processed
+      VECTOR_STORE_DIR: /app/data/vector_store
+      ANONYMIZED_TELEMETRY: "False"
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  ui:
+    image: arxivlens-app:latest
+    container_name: arxivlens-ui
+    command: streamlit run streamlit_app.py --server.address=0.0.0.0 --server.port=8501
+    env_file:
+      - .env
+    environment:
+      API_BASE_URL: http://api:8000
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+
+  ingest:
+    image: arxivlens-app:latest
+    container_name: arxivlens-ingest
+    command: python main.py --process-data
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /app/data/raw
+      OUTPUT_DIR: /app/data/processed
+      VECTOR_STORE_DIR: /app/data/vector_store
+      ANONYMIZED_TELEMETRY: "False"
+    volumes:
+      - ./data:/app/data
+    profiles:
+      - ingest

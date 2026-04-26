@@ -1,0 +1,12 @@
+# NOTE: Keep this file aligned with requirements.txt for reproducible deploys.
+# Critical pin pair: chromadb==1.0.7 requires posthog==3.25.0 (newer posthog may break telemetry init).
+fastapi==0.115.9
+uvicorn==0.34.2
+streamlit==1.44.1
+requests==2.32.3
+python-dotenv==1.1.0
+pydantic==2.11.3
+numpy==2.2.5
+chromadb==1.0.7
+posthog==3.25.0
+sentence-transformers==4.1.0
