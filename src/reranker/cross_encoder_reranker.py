@@ -47,12 +47,15 @@ class CrossEncoderReranker:
             return []
         if not self._load_model():
             return candidates[:final_top_k]
+        model = self._model
+        if model is None:
+            return candidates[:final_top_k]
 
         capped_candidates = candidates[: self.max_candidates]
         pairs = [(query_text, item.get("text", "")) for item in capped_candidates]
 
         try:
-            scores = self._model.predict(pairs)
+            scores = model.predict(pairs)
         except Exception as exc:
             logger.warning("Reranker scoring failed, using original ranking: %s", exc)
             return candidates[:final_top_k]
