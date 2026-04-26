@@ -2,15 +2,19 @@
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any
 import os
+import time
+import logging
 import uvicorn
+
+logger = logging.getLogger(__name__)
 
 class QueryRequest(BaseModel):
     """Request model for query endpoint"""
     query: str
-    top_k: int = 5
+    top_k: int = Field(default=8, ge=1, le=50)
 
 class QueryResponse(BaseModel):
     """Response model for query endpoint"""
@@ -51,24 +55,43 @@ class APIServer:
             return {"message": "ArxivLens API is running"}
 
         @self.app.post("/api/query", response_model=QueryResponse)
-        async def query(request: QueryRequest):
+        def query(request: QueryRequest):
             try:
+                max_top_k = int(os.getenv("MAX_QUERY_TOP_K", "20"))
+                effective_top_k = min(request.top_k, max_top_k)
+                started_at = time.perf_counter()
                 rewritten_query = self.llm_interface.rewrite_query(request.query)
+                rewrite_elapsed = time.perf_counter() - started_at
 
                 # Generate query embedding
+                embed_started_at = time.perf_counter()
                 query_embedding = self.embedding_model.embed_query(rewritten_query)
+                embed_elapsed = time.perf_counter() - embed_started_at
 
                 # Retrieve relevant chunks
+                retrieval_started_at = time.perf_counter()
                 context_chunks = self.vector_store.query(
                     query_embedding=query_embedding,
                     query_text=rewritten_query,
-                    n_results=request.top_k
+                    n_results=effective_top_k
                 )
+                retrieval_elapsed = time.perf_counter() - retrieval_started_at
 
                 # Generate response
+                generation_started_at = time.perf_counter()
                 answer = self.llm_interface.generate_response(
                     query=request.query,
                     context_chunks=context_chunks
+                )
+                generation_elapsed = time.perf_counter() - generation_started_at
+                total_elapsed = time.perf_counter() - started_at
+                logger.info(
+                    "Query served in %.2fs (rewrite=%.2fs, embed=%.2fs, retrieval=%.2fs, generation=%.2fs)",
+                    total_elapsed,
+                    rewrite_elapsed,
+                    embed_elapsed,
+                    retrieval_elapsed,
+                    generation_elapsed,
                 )
 
                 return {

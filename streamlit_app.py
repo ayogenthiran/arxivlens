@@ -5,6 +5,9 @@ import streamlit as st
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 QUERY_URL = f"{API_BASE_URL}/api/query"
+DEFAULT_TOP_K = int(os.getenv("UI_DEFAULT_TOP_K", "8"))
+MIN_TOP_K = int(os.getenv("UI_MIN_TOP_K", "3"))
+MAX_TOP_K = int(os.getenv("UI_MAX_TOP_K", "20"))
 
 GLOBAL_STYLES = """
 <style>
@@ -81,6 +84,11 @@ GLOBAL_STYLES = """
     color: #94a3b8;
     font-size: 0.9rem;
 }
+.source-score {
+    margin-top: 0.35rem;
+    color: #bfdbfe;
+    font-size: 0.86rem;
+}
 .chunk-text {
     margin-top: 0.6rem;
     color: #cbd5e1;
@@ -122,7 +130,7 @@ def render_header() -> None:
     )
 
 
-def render_query_form() -> tuple[str, bool]:
+def render_query_form() -> tuple[str, int, bool]:
     with st.form("query-form", clear_on_submit=False):
         st.markdown('<div class="query-label">Ask a question</div>', unsafe_allow_html=True)
         query = st.text_input(
@@ -130,8 +138,27 @@ def render_query_form() -> tuple[str, bool]:
             placeholder="Enter your question...",
             label_visibility="collapsed",
         )
+        top_k = st.slider("Sources to retrieve", min_value=MIN_TOP_K, max_value=MAX_TOP_K, value=DEFAULT_TOP_K)
         ask_clicked = st.form_submit_button("Search")
-    return query, ask_clicked
+    return query, top_k, ask_clicked
+
+
+def _chunk_confidence(chunk: dict) -> tuple[str, str]:
+    score = chunk.get("hybrid_score")
+    if score is None:
+        score = chunk.get("vector_score")
+    if score is None:
+        return "N/A", "Unavailable"
+
+    score = float(score)
+    score = min(max(score, 0.0), 1.0)
+    if score >= 0.72:
+        band = "High"
+    elif score >= 0.45:
+        band = "Medium"
+    else:
+        band = "Low"
+    return f"{score:.2f}", band
 
 
 def render_result(result: dict) -> None:
@@ -141,6 +168,12 @@ def render_result(result: dict) -> None:
         f'<div class="answer-box">{result.get("answer", "No answer returned.")}</div>',
         unsafe_allow_html=True,
     )
+    rewritten_query = result.get("rewritten_query")
+    if rewritten_query:
+        st.markdown(
+            f'<div class="source-meta"><strong>Retrieval query:</strong> {rewritten_query}</div>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown("<h2>Sources</h2>", unsafe_allow_html=True)
     for chunk in result.get("context_chunks", []):
@@ -148,11 +181,13 @@ def render_result(result: dict) -> None:
         title = metadata.get("title", "Untitled")
         source = metadata.get("source", "Unknown")
         text = chunk.get("text", "")
+        score_value, score_band = _chunk_confidence(chunk)
         st.markdown(
             (
                 '<div class="source-card">'
                 f"<h3>{title}</h3>"
                 f'<div class="source-meta">Source: {source}</div>'
+                f'<div class="source-score">Relevance: {score_value} ({score_band})</div>'
                 f'<div class="chunk-text">{text}</div>'
                 "</div>"
             ),
@@ -176,7 +211,7 @@ def main() -> None:
     result = None
     error = None
 
-    query, ask_clicked = render_query_form()
+    query, top_k, ask_clicked = render_query_form()
 
     if ask_clicked:
         if not query.strip():
@@ -184,7 +219,7 @@ def main() -> None:
         else:
             try:
                 with st.spinner("Searching..."):
-                    result = query_rag_api(query.strip(), 5)
+                    result = query_rag_api(query.strip(), top_k)
             except requests.exceptions.RequestException as exc:
                 error = (
                     "Could not reach backend API. Make sure `python main.py` is running "

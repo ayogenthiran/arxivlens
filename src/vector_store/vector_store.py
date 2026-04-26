@@ -6,6 +6,7 @@ import re
 from typing import List, Dict, Any, Optional
 import numpy as np
 import chromadb
+from chromadb.config import Settings
 from rank_bm25 import BM25Okapi
 
 # Set up basic logging
@@ -41,10 +42,13 @@ class VectorStore:
             try:
                 if self.persist_directory:
                     os.makedirs(self.persist_directory, exist_ok=True)
-                    self.client = chromadb.PersistentClient(path=self.persist_directory)
+                    self.client = chromadb.PersistentClient(
+                        path=self.persist_directory,
+                        settings=Settings(anonymized_telemetry=False),
+                    )
                     logger.info(f"Initialized PersistentClient at {self.persist_directory}")
                 else:
-                    self.client = chromadb.Client()
+                    self.client = chromadb.Client(settings=Settings(anonymized_telemetry=False))
                     logger.info(f"Initialized In-Memory ChromaDB Client")
                 
                 self.collection = self._get_or_create_collection()
@@ -109,6 +113,20 @@ class VectorStore:
             return
 
         try:
+            max_bm25_docs = int(os.getenv("HYBRID_BM25_MAX_DOCS", "50000"))
+            total_docs = int(self.collection.count())
+            if total_docs > max_bm25_docs:
+                logger.info(
+                    "Skipping BM25 index build: collection size=%s exceeds HYBRID_BM25_MAX_DOCS=%s. "
+                    "Using vector-only retrieval.",
+                    total_docs,
+                    max_bm25_docs,
+                )
+                self._bm25 = None
+                self._bm25_doc_ids = []
+                self._bm25_docs = []
+                return
+
             all_docs = self.collection.get(include=["documents"])
             ids = all_docs.get("ids", [])
             documents = all_docs.get("documents", [])

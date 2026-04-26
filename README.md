@@ -84,6 +84,11 @@ VECTOR_STORE_DIR=data/vector_store
 EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
 OPENAI_API_KEY=your-openai-key-here
 OPENAI_API_BASE=https://api.openai.com/v1
+MAX_QUERY_TOP_K=20
+HYBRID_BM25_MAX_DOCS=50000
+UI_DEFAULT_TOP_K=8
+UI_MIN_TOP_K=3
+UI_MAX_TOP_K=20
 ```
 
 3. **Process Data** (one-time to populate vector store):
@@ -115,7 +120,7 @@ streamlit run streamlit_app.py
 
 Frontend will open at:
 ```
-http://localhost:3000
+http://localhost:8501
 ```
 
 ---
@@ -124,8 +129,9 @@ http://localhost:3000
 
 - Open [http://localhost:3000](http://localhost:3000)
 - Type a query related to your documents (e.g., "What is machine learning?")
+- Tune **Sources to retrieve** to trade-off breadth vs latency.
 - Click "Ask"
-- See AI-generated answer based on retrieved document context!
+- See AI-generated answer, rewritten retrieval query, and per-source relevance score.
 
 ---
 
