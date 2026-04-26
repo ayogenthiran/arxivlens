@@ -149,16 +149,19 @@ def main():
                 max_attempts=retry_max_attempts,
                 base_delay_s=retry_base_delay_s,
             )
-            _append_chunks_jsonl(chunks_jsonl_path, chunks_with_embeddings)
+            if chunks_with_embeddings is None:
+                raise RuntimeError("Embedding generation returned no chunks")
+            embedded_chunks = chunks_with_embeddings
+            _append_chunks_jsonl(chunks_jsonl_path, embedded_chunks)
             _with_retry(
                 "vector store write",
-                lambda: vector_store.add_embeddings(chunks_with_embeddings),
+                lambda: vector_store.add_embeddings(embedded_chunks),
                 max_attempts=retry_max_attempts,
                 base_delay_s=retry_base_delay_s,
             )
 
             processed_docs += len(current_batch_docs)
-            processed_chunks += len(chunks_with_embeddings)
+            processed_chunks += len(embedded_chunks)
             _write_checkpoint(checkpoint_path, resume_from + processed_docs)
             _log_progress("Batch done")
             current_batch_docs = []
@@ -171,15 +174,18 @@ def main():
                 max_attempts=retry_max_attempts,
                 base_delay_s=retry_base_delay_s,
             )
-            _append_chunks_jsonl(chunks_jsonl_path, chunks_with_embeddings)
+            if chunks_with_embeddings is None:
+                raise RuntimeError("Embedding generation returned no chunks")
+            embedded_chunks = chunks_with_embeddings
+            _append_chunks_jsonl(chunks_jsonl_path, embedded_chunks)
             _with_retry(
                 "vector store write",
-                lambda: vector_store.add_embeddings(chunks_with_embeddings),
+                lambda: vector_store.add_embeddings(embedded_chunks),
                 max_attempts=retry_max_attempts,
                 base_delay_s=retry_base_delay_s,
             )
             processed_docs += len(current_batch_docs)
-            processed_chunks += len(chunks_with_embeddings)
+            processed_chunks += len(embedded_chunks)
             _write_checkpoint(checkpoint_path, resume_from + processed_docs)
             _log_progress("Final batch done")
 
