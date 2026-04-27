@@ -29,6 +29,7 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     """Response model for query endpoint"""
     answer: str
+    citations: List[Dict[str, Any]]
     context_chunks: List[Dict[str, Any]]
     facets: Dict[str, Any]
     query: str
@@ -107,10 +108,12 @@ class APIServer:
 
                 # Generate response
                 generation_started_at = time.perf_counter()
-                answer = self.llm_interface.generate_response(
+                llm_output = self.llm_interface.generate_response(
                     query=request.query,
                     context_chunks=context_chunks
                 )
+                answer = llm_output.get("answer", "No answer returned.")
+                citations = llm_output.get("citations", [])
                 generation_elapsed = time.perf_counter() - generation_started_at
                 total_elapsed = time.perf_counter() - started_at
                 logger.info(
@@ -125,6 +128,7 @@ class APIServer:
 
                 return {
                     "answer": answer,
+                    "citations": citations,
                     "context_chunks": context_chunks,
                     "facets": facets,
                     "query": request.query,

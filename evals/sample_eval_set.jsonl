@@ -1,0 +1,2 @@
+{"query":"What is retrieval-augmented generation?","relevant_chunk_ids":["replace_with_real_chunk_id_1","replace_with_real_chunk_id_2"],"top_k":8}
+{"query":"How does a cross-encoder reranker help retrieval?","relevant_chunk_ids":["replace_with_real_chunk_id_3"],"top_k":8}

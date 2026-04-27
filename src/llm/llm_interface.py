@@ -1,6 +1,7 @@
 # src/llm/llm_interface.py
 
 import os
+import json
 import logging
 import requests
 from typing import List, Dict, Any, Optional
@@ -29,14 +30,47 @@ class LLMInterface:
         if not self.api_key:
             logger.warning("OPENAI_API_KEY not found in environment variables. API calls will fail.")
 
-    def generate_response(self, query: str, context_chunks: List[Dict[str, Any]]) -> str:
+    def generate_response(self, query: str, context_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Generate a response using the LLM with retrieved context.
+        Returns a structured payload with validated citations.
         """
         formatted_context = self._format_context(context_chunks)
         prompt = self._create_prompt(query, formatted_context)
-        response = self._call_llm_api(prompt)
-        return response
+        citation_schema = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "rag_answer_with_citations",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {"type": "string"},
+                        "citations": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "doc_id": {"type": "integer"},
+                                    "quote": {"type": "string"},
+                                },
+                                "required": ["doc_id", "quote"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                    "required": ["answer", "citations"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+
+        raw_response = self._call_llm_api(
+            prompt=prompt,
+            response_format=citation_schema,
+            temperature=0.2,
+        )
+        return self._parse_and_validate_response(raw_response, context_chunks)
 
     def rewrite_query(self, query: str) -> str:
         """
@@ -103,10 +137,54 @@ CONTEXT:
 USER QUERY:
 {query}
 
-Please answer the query based only on the provided context. If the context doesn't contain relevant information, state that you don't have enough information. Include citations to specific documents when possible.
+Please answer the query based only on the provided context. If the context doesn't contain relevant information, state that you don't have enough information.
+Return a JSON object with:
+- "answer": final answer text
+- "citations": list of objects with "doc_id" (matching [Document N]) and "quote" (exact short supporting quote from that document)
+Only cite documents that appear in the provided context.
 
 ANSWER:
 """
+
+    def _parse_and_validate_response(self, raw_response: str, context_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Parse model JSON output and keep only citations validated against retrieved context.
+        """
+        default_payload = {"answer": raw_response.strip(), "citations": []}
+        if not raw_response.strip():
+            return {"answer": "No answer returned.", "citations": []}
+
+        try:
+            parsed = json.loads(raw_response)
+            answer = str(parsed.get("answer", "")).strip()
+            citations = parsed.get("citations", [])
+            if not isinstance(citations, list):
+                citations = []
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            return default_payload
+
+        if not answer:
+            answer = "I do not have enough information in the provided context."
+
+        allowed_doc_ids = set(range(1, len(context_chunks) + 1))
+        validated_citations = []
+        for citation in citations:
+            if not isinstance(citation, dict):
+                continue
+            doc_id = citation.get("doc_id")
+            quote = citation.get("quote")
+            if not isinstance(doc_id, int) or doc_id not in allowed_doc_ids:
+                continue
+            if not isinstance(quote, str) or not quote.strip():
+                continue
+
+            chunk_text = str(context_chunks[doc_id - 1].get("text", ""))
+            if quote.strip().lower() not in chunk_text.lower():
+                continue
+
+            validated_citations.append({"doc_id": doc_id, "quote": quote.strip()})
+
+        return {"answer": answer, "citations": validated_citations}
 
     def _call_llm_api(
         self,
@@ -115,6 +193,7 @@ ANSWER:
         temperature: float = 0.3,
         max_tokens: int = 1000,
         model_name: Optional[str] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Call the LLM API with the prompt.
@@ -142,6 +221,8 @@ ANSWER:
             "temperature": temperature,
             "max_tokens": max_tokens
         }
+        if response_format is not None:
+            data["response_format"] = response_format
 
         try:
             response = requests.post(url, headers=headers, json=data, timeout=15)

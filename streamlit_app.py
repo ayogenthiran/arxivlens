@@ -34,6 +34,11 @@ GLOBAL_STYLES = """
     font-weight: 600;
     margin-bottom: 0.4rem;
 }
+.query-hint {
+    margin-top: 0.35rem;
+    color: #94a3b8;
+    font-size: 0.88rem;
+}
 .stTextInput input {
     background: #1e293b !important;
     color: #f8fafc !important;
@@ -78,6 +83,11 @@ GLOBAL_STYLES = """
     border-radius: 10px;
     padding: 0.9rem 1rem;
     margin-bottom: 0.75rem;
+}
+.trust-note {
+    color: #cbd5e1;
+    font-size: 0.86rem;
+    margin-top: 0.45rem;
 }
 .source-meta {
     margin-top: 0.25rem;
@@ -146,26 +156,37 @@ def render_header() -> None:
 def render_query_form() -> tuple[str, int, dict, bool]:
     with st.form("query-form", clear_on_submit=False):
         st.markdown('<div class="query-label">Ask a question</div>', unsafe_allow_html=True)
-        query = st.text_input(
-            "Enter your question...",
+        query = st.text_area(
+            "What do you want to learn from arXiv papers?",
             placeholder="Enter your question...",
             label_visibility="collapsed",
+            height=110,
         )
-        top_k = st.slider("Sources to retrieve", min_value=MIN_TOP_K, max_value=MAX_TOP_K, value=DEFAULT_TOP_K)
-        categories_raw = st.text_input(
-            "Categories (comma-separated, e.g. cs.CL, cs.AI)",
-            placeholder="cs.CL, cs.AI",
+        st.markdown(
+            '<div class="query-hint">Tip: Ask specific questions to get better cited answers.</div>',
+            unsafe_allow_html=True,
         )
-        authors_raw = st.text_input(
-            "Author keywords (comma-separated, optional)",
-            placeholder="Yann LeCun, Geoffrey Hinton",
-        )
-        year_col_min, year_col_max = st.columns(2)
-        with year_col_min:
-            year_min_raw = st.text_input("Year from (optional)", placeholder="2019")
-        with year_col_max:
-            year_max_raw = st.text_input("Year to (optional)", placeholder="2024")
-        ask_clicked = st.form_submit_button("Search")
+        with st.expander("Advanced retrieval settings", expanded=False):
+            top_k = st.slider(
+                "Sources to retrieve (higher may improve coverage but can be slower)",
+                min_value=MIN_TOP_K,
+                max_value=MAX_TOP_K,
+                value=DEFAULT_TOP_K,
+            )
+            categories_raw = st.text_input(
+                "Categories (comma-separated, e.g. cs.CL, cs.AI)",
+                placeholder="cs.CL, cs.AI",
+            )
+            authors_raw = st.text_input(
+                "Author keywords (comma-separated, optional)",
+                placeholder="Yann LeCun, Geoffrey Hinton",
+            )
+            year_col_min, year_col_max = st.columns(2)
+            with year_col_min:
+                year_min_raw = st.text_input("Year from (optional)", placeholder="2019")
+            with year_col_max:
+                year_max_raw = st.text_input("Year to (optional)", placeholder="2024")
+        ask_clicked = st.form_submit_button("Ask")
     year_min = _parse_year_input(year_min_raw)
     year_max = _parse_year_input(year_max_raw)
     filters = {
@@ -202,12 +223,33 @@ def render_result(result: dict) -> None:
         f'<div class="answer-box">{result.get("answer", "No answer returned.")}</div>',
         unsafe_allow_html=True,
     )
+    st.markdown(
+        '<div class="trust-note">AI-generated synthesis. Verify details with linked sources.</div>',
+        unsafe_allow_html=True,
+    )
     rewritten_query = result.get("rewritten_query")
     if rewritten_query:
         st.markdown(
             f'<div class="source-meta"><strong>Retrieval query:</strong> {rewritten_query}</div>',
             unsafe_allow_html=True,
         )
+    citations = result.get("citations", [])
+    if citations:
+        st.markdown("<h2>Citations</h2>", unsafe_allow_html=True)
+        for item in citations:
+            doc_id = item.get("doc_id")
+            quote = item.get("quote", "")
+            if doc_id is None:
+                continue
+            st.markdown(
+                (
+                    '<div class="source-card">'
+                    f"<h3>Document {doc_id}</h3>"
+                    f'<div class="chunk-text">"{quote}"</div>'
+                    "</div>"
+                ),
+                unsafe_allow_html=True,
+            )
 
     facets = result.get("facets", {})
     if facets:
@@ -236,6 +278,8 @@ def render_result(result: dict) -> None:
         metadata = chunk.get("metadata", {})
         title = metadata.get("title", "Untitled")
         source = metadata.get("source", "Unknown")
+        paper_id = metadata.get("id") or metadata.get("paper_id")
+        arxiv_url = f"https://arxiv.org/abs/{paper_id}" if paper_id else None
         year = metadata.get("year")
         categories = ", ".join(metadata.get("categories", []))
         authors = ", ".join(metadata.get("authors", [])[:3])
@@ -248,10 +292,16 @@ def render_result(result: dict) -> None:
             metadata_segments.append(f"Categories: {categories}")
         if authors:
             metadata_segments.append(f"Authors: {authors}")
+        source_link_html = (
+            f'<div class="source-meta"><a href="{arxiv_url}" target="_blank">Open on arXiv</a></div>'
+            if arxiv_url
+            else ""
+        )
         st.markdown(
             (
                 '<div class="source-card">'
                 f"<h3>{title}</h3>"
+                f"{source_link_html}"
                 f'<div class="source-meta">{" | ".join(metadata_segments)}</div>'
                 f'<div class="source-score">Relevance: {score_value} ({score_band})</div>'
                 f'<div class="chunk-text">{text}</div>'
@@ -264,7 +314,7 @@ def render_result(result: dict) -> None:
 
 def render_footer() -> None:
     st.markdown(
-        '<footer class="app-footer">Arxix Lens &copy; 2025</footer>',
+        '<footer class="app-footer">Arxix Lens &copy; 2026</footer>',
         unsafe_allow_html=True,
     )
 
@@ -290,8 +340,12 @@ def main() -> None:
             error = "Year from must be less than or equal to Year to."
         else:
             try:
-                with st.spinner("Searching..."):
+                with st.status("Running pipeline...", expanded=True) as status:
+                    st.write("Retrieving papers...")
+                    st.write("Reranking sources...")
+                    st.write("Generating answer...")
                     result = query_rag_api(query.strip(), top_k, filters)
+                    status.update(label="Completed", state="complete")
             except requests.exceptions.RequestException as exc:
                 error = (
                     "Could not reach backend API. Make sure `python main.py` is running "
