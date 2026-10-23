@@ -1,13 +1,25 @@
-import os
+import html
+from datetime import datetime
+
 import requests
 import streamlit as st
 
+from src.settings import (
+    API_BASE_URL,
+    API_QUERY_TIMEOUT_S,
+    ARXIV_ABS_BASE_URL,
+    DEFAULT_TOP_K,
+    UI_CONFIDENCE_HIGH,
+    UI_CONFIDENCE_MEDIUM,
+    UI_FACET_LIMIT,
+    UI_MAX_AUTHORS_SHOWN,
+    UI_MAX_TOP_K,
+    UI_MIN_TOP_K,
+    YEAR_MAX_BOUND,
+    YEAR_MIN_BOUND,
+)
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 QUERY_URL = f"{API_BASE_URL}/api/query"
-DEFAULT_TOP_K = int(os.getenv("UI_DEFAULT_TOP_K", "8"))
-MIN_TOP_K = int(os.getenv("UI_MIN_TOP_K", "3"))
-MAX_TOP_K = int(os.getenv("UI_MAX_TOP_K", "20"))
 
 GLOBAL_STYLES = """
 <style>
@@ -94,6 +106,9 @@ GLOBAL_STYLES = """
     color: #94a3b8;
     font-size: 0.9rem;
 }
+.source-card a {
+    color: #93c5fd;
+}
 .source-score {
     margin-top: 0.35rem;
     color: #bfdbfe;
@@ -118,16 +133,27 @@ def inject_styles() -> None:
     st.markdown(GLOBAL_STYLES, unsafe_allow_html=True)
 
 
-def _parse_year_input(raw_value: str) -> int | None:
+def _html(value: object) -> str:
+    return html.escape(str(value)).replace("\n", "<br>")
+
+
+def _arxiv_url(paper_id: object) -> str | None:
+    paper_id = str(paper_id or "").strip()
+    if not paper_id:
+        return None
+    return f"{ARXIV_ABS_BASE_URL}/{paper_id}"
+
+
+def _parse_year_input(raw_value: str) -> tuple[int | None, str | None]:
     value = raw_value.strip()
     if not value:
-        return None
+        return None, None
     if not value.isdigit():
-        return None
+        return None, "Year must be a number."
     year = int(value)
-    if 1900 <= year <= 2100:
-        return year
-    return None
+    if YEAR_MIN_BOUND <= year <= YEAR_MAX_BOUND:
+        return year, None
+    return None, f"Year must be between {YEAR_MIN_BOUND} and {YEAR_MAX_BOUND}."
 
 
 def query_rag_api(query: str, top_k: int, filters: dict) -> dict:
@@ -135,7 +161,7 @@ def query_rag_api(query: str, top_k: int, filters: dict) -> dict:
     response = requests.post(
         QUERY_URL,
         json=payload,
-        timeout=60,
+        timeout=API_QUERY_TIMEOUT_S,
     )
     response.raise_for_status()
     return response.json()
@@ -145,7 +171,7 @@ def render_header() -> None:
     st.markdown(
         """
         <header class="app-header">
-            <h1>Arxix Lens</h1>
+            <h1>ArxivLens</h1>
             <p>Ask questions about scientific papers from ArXiv</p>
         </header>
         """,
@@ -153,7 +179,7 @@ def render_header() -> None:
     )
 
 
-def render_query_form() -> tuple[str, int, dict, bool]:
+def render_query_form() -> tuple[str, int, dict, bool, str | None]:
     with st.form("query-form", clear_on_submit=False):
         st.markdown('<div class="query-label">Ask a question</div>', unsafe_allow_html=True)
         query = st.text_area(
@@ -169,8 +195,8 @@ def render_query_form() -> tuple[str, int, dict, bool]:
         with st.expander("Advanced retrieval settings", expanded=False):
             top_k = st.slider(
                 "Sources to retrieve (higher may improve coverage but can be slower)",
-                min_value=MIN_TOP_K,
-                max_value=MAX_TOP_K,
+                min_value=UI_MIN_TOP_K,
+                max_value=UI_MAX_TOP_K,
                 value=DEFAULT_TOP_K,
             )
             categories_raw = st.text_input(
@@ -187,19 +213,19 @@ def render_query_form() -> tuple[str, int, dict, bool]:
             with year_col_max:
                 year_max_raw = st.text_input("Year to (optional)", placeholder="2024")
         ask_clicked = st.form_submit_button("Ask")
-    year_min = _parse_year_input(year_min_raw)
-    year_max = _parse_year_input(year_max_raw)
+    year_min, year_min_error = _parse_year_input(year_min_raw)
+    year_max, year_max_error = _parse_year_input(year_max_raw)
     filters = {
         "categories": [value.strip() for value in categories_raw.split(",") if value.strip()],
         "authors": [value.strip() for value in authors_raw.split(",") if value.strip()],
         "year_min": year_min,
         "year_max": year_max,
     }
-    return query, top_k, filters, ask_clicked
+    return query, top_k, filters, ask_clicked, year_min_error or year_max_error
 
 
 def _chunk_confidence(chunk: dict) -> tuple[str, str]:
-    score = chunk.get("hybrid_score")
+    score = chunk.get("reranker_score")
     if score is None:
         score = chunk.get("vector_score")
     if score is None:
@@ -207,9 +233,9 @@ def _chunk_confidence(chunk: dict) -> tuple[str, str]:
 
     score = float(score)
     score = min(max(score, 0.0), 1.0)
-    if score >= 0.72:
+    if score >= UI_CONFIDENCE_HIGH:
         band = "High"
-    elif score >= 0.45:
+    elif score >= UI_CONFIDENCE_MEDIUM:
         band = "Medium"
     else:
         band = "Low"
@@ -220,32 +246,41 @@ def render_result(result: dict) -> None:
     st.markdown('<div class="result-container">', unsafe_allow_html=True)
     st.markdown("<h2>Answer</h2>", unsafe_allow_html=True)
     st.markdown(
-        f'<div class="answer-box">{result.get("answer", "No answer returned.")}</div>',
+        f'<div class="answer-box">{_html(result.get("answer", "No answer returned."))}</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
         '<div class="trust-note">AI-generated synthesis. Verify details with linked sources.</div>',
         unsafe_allow_html=True,
     )
-    rewritten_query = result.get("rewritten_query")
-    if rewritten_query:
+    rewritten_query = str(result.get("rewritten_query") or "").strip()
+    original_query = str(result.get("query") or "").strip()
+    if rewritten_query and rewritten_query != original_query:
         st.markdown(
-            f'<div class="source-meta"><strong>Retrieval query:</strong> {rewritten_query}</div>',
+            f'<div class="source-meta"><strong>Retrieval query:</strong> {_html(rewritten_query)}</div>',
             unsafe_allow_html=True,
         )
     citations = result.get("citations", [])
     if citations:
         st.markdown("<h2>Citations</h2>", unsafe_allow_html=True)
         for item in citations:
-            doc_id = item.get("doc_id")
-            quote = item.get("quote", "")
-            if doc_id is None:
+            quote = str(item.get("quote") or "").strip()
+            if not quote:
                 continue
+            arxiv_id = str(item.get("arxiv_id") or "").strip()
+            title = str(item.get("title") or "").strip() or arxiv_id or "Untitled"
+            arxiv_url = _arxiv_url(arxiv_id)
+            link_html = (
+                f'<div class="source-meta"><a href="{html.escape(arxiv_url, quote=True)}" target="_blank" rel="noopener noreferrer">Open on arXiv ({_html(arxiv_id)})</a></div>'
+                if arxiv_url
+                else ""
+            )
             st.markdown(
                 (
                     '<div class="source-card">'
-                    f"<h3>Document {doc_id}</h3>"
-                    f'<div class="chunk-text">"{quote}"</div>'
+                    f"<h3>{_html(title)}</h3>"
+                    f"{link_html}"
+                    f'<div class="chunk-text">"{_html(quote)}"</div>'
                     "</div>"
                 ),
                 unsafe_allow_html=True,
@@ -255,20 +290,26 @@ def render_result(result: dict) -> None:
     if facets:
         st.markdown("<h2>Facets</h2>", unsafe_allow_html=True)
         facet_lines = []
-        top_years = facets.get("years", [])[:5]
-        top_categories = facets.get("categories", [])[:5]
-        top_authors = facets.get("authors", [])[:5]
+        top_years = facets.get("years", [])[:UI_FACET_LIMIT]
+        top_categories = facets.get("categories", [])[:UI_FACET_LIMIT]
+        top_authors = facets.get("authors", [])[:UI_FACET_LIMIT]
         if top_years:
             facet_lines.append(
-                "Years: " + ", ".join(f"{item['value']} ({item['count']})" for item in top_years)
+                "Years: " + ", ".join(
+                    f"{_html(item['value'])} ({_html(item['count'])})" for item in top_years
+                )
             )
         if top_categories:
             facet_lines.append(
-                "Categories: " + ", ".join(f"{item['value']} ({item['count']})" for item in top_categories)
+                "Categories: " + ", ".join(
+                    f"{_html(item['value'])} ({_html(item['count'])})" for item in top_categories
+                )
             )
         if top_authors:
             facet_lines.append(
-                "Authors: " + ", ".join(f"{item['value']} ({item['count']})" for item in top_authors)
+                "Authors: " + ", ".join(
+                    f"{_html(item['value'])} ({_html(item['count'])})" for item in top_authors
+                )
             )
         for line in facet_lines:
             st.markdown(f'<div class="source-meta">{line}</div>', unsafe_allow_html=True)
@@ -278,33 +319,39 @@ def render_result(result: dict) -> None:
         metadata = chunk.get("metadata", {})
         title = metadata.get("title", "Untitled")
         source = metadata.get("source", "Unknown")
-        paper_id = metadata.get("id") or metadata.get("paper_id")
-        arxiv_url = f"https://arxiv.org/abs/{paper_id}" if paper_id else None
+        paper_id = metadata.get("doc_id") or metadata.get("id") or metadata.get("paper_id")
+        arxiv_url = _arxiv_url(paper_id)
         year = metadata.get("year")
-        categories = ", ".join(metadata.get("categories", []))
-        authors = ", ".join(metadata.get("authors", [])[:3])
+        categories = metadata.get("categories") or []
+        authors = metadata.get("authors") or []
+        if isinstance(categories, str):
+            categories = [categories]
+        if isinstance(authors, str):
+            authors = [authors]
+        category_text = ", ".join(str(category) for category in categories)
+        author_text = ", ".join(str(author) for author in list(authors)[:UI_MAX_AUTHORS_SHOWN])
         text = chunk.get("text", "")
         score_value, score_band = _chunk_confidence(chunk)
-        metadata_segments = [f"Source: {source}"]
+        metadata_segments = [f"Source: {_html(source)}"]
         if year:
-            metadata_segments.append(f"Year: {year}")
-        if categories:
-            metadata_segments.append(f"Categories: {categories}")
-        if authors:
-            metadata_segments.append(f"Authors: {authors}")
+            metadata_segments.append(f"Year: {_html(year)}")
+        if category_text:
+            metadata_segments.append(f"Categories: {_html(category_text)}")
+        if author_text:
+            metadata_segments.append(f"Authors: {_html(author_text)}")
         source_link_html = (
-            f'<div class="source-meta"><a href="{arxiv_url}" target="_blank">Open on arXiv</a></div>'
+            f'<div class="source-meta"><a href="{html.escape(arxiv_url, quote=True)}" target="_blank" rel="noopener noreferrer">Open on arXiv</a></div>'
             if arxiv_url
             else ""
         )
         st.markdown(
             (
                 '<div class="source-card">'
-                f"<h3>{title}</h3>"
+                f"<h3>{_html(title)}</h3>"
                 f"{source_link_html}"
                 f'<div class="source-meta">{" | ".join(metadata_segments)}</div>'
-                f'<div class="source-score">Relevance: {score_value} ({score_band})</div>'
-                f'<div class="chunk-text">{text}</div>'
+                f'<div class="source-score">Relevance: {_html(score_value)} ({_html(score_band)})</div>'
+                f'<div class="chunk-text">{_html(text)}</div>'
                 "</div>"
             ),
             unsafe_allow_html=True,
@@ -314,7 +361,7 @@ def render_result(result: dict) -> None:
 
 def render_footer() -> None:
     st.markdown(
-        '<footer class="app-footer">Arxix Lens &copy; 2026</footer>',
+        f'<footer class="app-footer">ArxivLens &copy; {datetime.now().year}</footer>',
         unsafe_allow_html=True,
     )
 
@@ -327,11 +374,13 @@ def main() -> None:
     result = None
     error = None
 
-    query, top_k, filters, ask_clicked = render_query_form()
+    query, top_k, filters, ask_clicked, year_error = render_query_form()
 
     if ask_clicked:
         if not query.strip():
             error = "Please enter a question first."
+        elif year_error:
+            error = year_error
         elif (
             filters.get("year_min") is not None
             and filters.get("year_max") is not None
@@ -353,7 +402,7 @@ def main() -> None:
                 )
 
     if error:
-        st.markdown(f'<div class="error-box">Error: {error}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="error-box">Error: {_html(error)}</div>', unsafe_allow_html=True)
 
     if result:
         render_result(result)

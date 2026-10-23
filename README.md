@@ -35,6 +35,8 @@ This repository implements a complete RAG pipeline with a user-friendly web inte
 └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
+The current ingest and query paths are drawn in [architecture.md](architecture.md).
+
 ## Dataset
 
 This project uses the [ArXiv Dataset](https://www.kaggle.com/datasets/Cornell-University/arxiv) containing scientific papers across various domains. The dataset provides rich, technical content perfect for demonstrating RAG capabilities in specialized knowledge retrieval.
@@ -90,6 +92,7 @@ HYBRID_BM25_MAX_DOCS=50000
 ENABLE_RERANKER=true
 RERANKER_MODEL_NAME=cross-encoder/ms-marco-MiniLM-L-6-v2
 RERANKER_MAX_CANDIDATES=24
+RERANKER_MIN_RAW_SCORE=1
 UI_DEFAULT_TOP_K=8
 UI_MIN_TOP_K=3
 UI_MAX_TOP_K=20

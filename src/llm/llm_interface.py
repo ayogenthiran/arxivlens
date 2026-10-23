@@ -1,14 +1,29 @@
 # src/llm/llm_interface.py
 
-import os
 import json
 import logging
+import os
+from typing import Any, Dict, List, Optional
+
 import requests
-from typing import List, Dict, Any, Optional
+
+from src.settings import (
+    ENABLE_QUERY_REWRITE,
+    LLM_MAX_TOKENS,
+    LLM_MODEL_NAME,
+    LLM_REQUEST_TIMEOUT_S,
+    LLM_TEMPERATURE,
+    OPENAI_API_BASE,
+    QUERY_REWRITE_MAX_TOKENS,
+    QUERY_REWRITE_MODEL,
+    QUERY_REWRITE_TEMPERATURE,
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+INSUFFICIENT_CONTEXT_ANSWER = "I do not have enough information in the provided context."
 
 class LLMInterface:
     """
@@ -22,10 +37,10 @@ class LLMInterface:
         Args:
             model_name: Name of the LLM model to use
         """
-        self.model_name = model_name or os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
-        self.rewrite_model_name = os.getenv("QUERY_REWRITE_MODEL", self.model_name)
+        self.model_name = model_name or LLM_MODEL_NAME
+        self.rewrite_model_name = QUERY_REWRITE_MODEL or self.model_name
         self.api_key = os.getenv("OPENAI_API_KEY")
-        self.api_base = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+        self.api_base = OPENAI_API_BASE
         
         if not self.api_key:
             logger.warning("OPENAI_API_KEY not found in environment variables. API calls will fail.")
@@ -68,7 +83,8 @@ class LLMInterface:
         raw_response = self._call_llm_api(
             prompt=prompt,
             response_format=citation_schema,
-            temperature=0.2,
+            temperature=LLM_TEMPERATURE,
+            max_tokens=LLM_MAX_TOKENS,
         )
         return self._parse_and_validate_response(raw_response, context_chunks)
 
@@ -80,7 +96,7 @@ class LLMInterface:
         if not query.strip():
             return query
 
-        if os.getenv("ENABLE_QUERY_REWRITE", "true").lower() != "true":
+        if not ENABLE_QUERY_REWRITE:
             return query
 
         rewrite_prompt = (
@@ -98,8 +114,8 @@ class LLMInterface:
                     "You rewrite search queries for document retrieval. "
                     "Do not answer the question."
                 ),
-                temperature=0.0,
-                max_tokens=64,
+                temperature=QUERY_REWRITE_TEMPERATURE,
+                max_tokens=QUERY_REWRITE_MAX_TOKENS,
                 model_name=self.rewrite_model_name,
             )
             rewritten = rewritten.strip().replace("\n", " ")
@@ -164,7 +180,7 @@ ANSWER:
             return default_payload
 
         if not answer:
-            answer = "I do not have enough information in the provided context."
+            answer = INSUFFICIENT_CONTEXT_ANSWER
 
         allowed_doc_ids = set(range(1, len(context_chunks) + 1))
         validated_citations = []
@@ -178,11 +194,24 @@ ANSWER:
             if not isinstance(quote, str) or not quote.strip():
                 continue
 
-            chunk_text = str(context_chunks[doc_id - 1].get("text", ""))
+            chunk = context_chunks[doc_id - 1]
+            chunk_text = str(chunk.get("text", ""))
             if quote.strip().lower() not in chunk_text.lower():
                 continue
 
-            validated_citations.append({"doc_id": doc_id, "quote": quote.strip()})
+            metadata = chunk.get("metadata") or {}
+            arxiv_id = str(metadata.get("doc_id") or "").strip()
+            chunk_id = str(chunk.get("id") or metadata.get("chunk_id") or "").strip()
+            title = str(metadata.get("title") or "").strip()
+            validated_citations.append(
+                {
+                    "doc_id": doc_id,
+                    "arxiv_id": arxiv_id,
+                    "chunk_id": chunk_id,
+                    "title": title,
+                    "quote": quote.strip(),
+                }
+            )
 
         return {"answer": answer, "citations": validated_citations}
 
@@ -190,8 +219,8 @@ ANSWER:
         self,
         prompt: str,
         system_message: Optional[str] = None,
-        temperature: float = 0.3,
-        max_tokens: int = 1000,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
         model_name: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
@@ -200,6 +229,11 @@ ANSWER:
         """
         if not self.api_key:
             raise RuntimeError("API key not configured. Please set the OPENAI_API_KEY environment variable.")
+
+        if temperature is None:
+            temperature = LLM_TEMPERATURE
+        if max_tokens is None:
+            max_tokens = LLM_MAX_TOKENS
 
         url = f"{self.api_base}/chat/completions"
 
@@ -225,7 +259,7 @@ ANSWER:
             data["response_format"] = response_format
 
         try:
-            response = requests.post(url, headers=headers, json=data, timeout=15)
+            response = requests.post(url, headers=headers, json=data, timeout=LLM_REQUEST_TIMEOUT_S)
 
             if response.status_code == 200:
                 return response.json()["choices"][0]["message"]["content"]

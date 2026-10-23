@@ -1,14 +1,27 @@
 # src/vector_store/vector_store.py
 
-import os
 import logging
+import os
 import re
 from collections import Counter
-from typing import List, Dict, Any, Optional
-import numpy as np
+from typing import Any, Dict, List, Optional
+
 import chromadb
 from chromadb.config import Settings
+import numpy as np
 from rank_bm25 import BM25Okapi
+
+from src.settings import (
+    ANONYMIZED_TELEMETRY,
+    CHROMA_COLLECTION_NAME,
+    DEFAULT_TOP_K,
+    FACET_TOP_AUTHORS,
+    HYBRID_BM25_MAX_DOCS,
+    RETRIEVAL_CANDIDATE_MULTIPLIER,
+    RETRIEVAL_FILTER_CANDIDATE_FLOOR,
+    RETRIEVAL_FILTER_CANDIDATE_MULTIPLIER,
+    RRF_K,
+)
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO)
@@ -19,7 +32,7 @@ class VectorStore:
     Manages vector storage and retrieval using ChromaDB.
     """
 
-    def __init__(self, persist_directory: Optional[str] = None, collection_name: str = "documents"):
+    def __init__(self, persist_directory: Optional[str] = None, collection_name: Optional[str] = None):
         """
         Initialize the vector store.
 
@@ -28,7 +41,7 @@ class VectorStore:
             collection_name: Name of the collection to use
         """
         self.persist_directory = persist_directory
-        self.collection_name = collection_name
+        self.collection_name = collection_name or CHROMA_COLLECTION_NAME
         self.client = None
         self.collection = None
         self._bm25 = None
@@ -46,11 +59,11 @@ class VectorStore:
                     os.makedirs(self.persist_directory, exist_ok=True)
                     self.client = chromadb.PersistentClient(
                         path=self.persist_directory,
-                        settings=Settings(anonymized_telemetry=False),
+                        settings=Settings(anonymized_telemetry=ANONYMIZED_TELEMETRY),
                     )
                     logger.info(f"Initialized PersistentClient at {self.persist_directory}")
                 else:
-                    self.client = chromadb.Client(settings=Settings(anonymized_telemetry=False))
+                    self.client = chromadb.Client(settings=Settings(anonymized_telemetry=ANONYMIZED_TELEMETRY))
                     logger.info(f"Initialized In-Memory ChromaDB Client")
                 
                 self.collection = self._get_or_create_collection()
@@ -87,7 +100,7 @@ class VectorStore:
         ids = [chunk["metadata"]["chunk_id"] for chunk in chunks]
         embeddings = [chunk["embedding"] for chunk in chunks]
         documents = [chunk["text"] for chunk in chunks]
-        metadatas = [self._normalize_chunk_metadata(chunk["metadata"]) for chunk in chunks]
+        metadatas = [self._metadata_for_chroma(chunk["metadata"]) for chunk in chunks]
 
         try:
             self.collection.add(
@@ -116,7 +129,7 @@ class VectorStore:
             return
 
         try:
-            max_bm25_docs = int(os.getenv("HYBRID_BM25_MAX_DOCS", "50000"))
+            max_bm25_docs = HYBRID_BM25_MAX_DOCS
             total_docs = int(self.collection.count())
             if total_docs > max_bm25_docs:
                 logger.info(
@@ -195,7 +208,7 @@ class VectorStore:
         self,
         query_embedding: np.ndarray,
         query_text: Optional[str] = None,
-        n_results: int = 5,
+        n_results: int = DEFAULT_TOP_K,
         filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -212,79 +225,148 @@ class VectorStore:
         if self.collection is None:
             self.initialize()
 
+        # Oversample so one chunk per paper can still fill n_results after
+        # overlapping abstract chunks collapse. Category and author filters
+        # run after Chroma returns, so those queries need a wider pool first.
+        # Year bounds stay in the Chroma where clause.
+        candidate_limit = self._candidate_limit(n_results, filters)
+
         try:
             where_clause = self._build_where_clause(filters)
             vector_results = self._vector_search(
                 query_embedding=query_embedding,
-                n_results=n_results * 3,
+                n_results=candidate_limit,
                 where=where_clause,
             )
             vector_results = [
                 item for item in vector_results if self._metadata_matches_filters(item.get("metadata", {}), filters)
             ]
+            vector_results = sorted(
+                vector_results,
+                key=lambda item: float(item.get("vector_score") or 0.0),
+                reverse=True,
+            )
         except Exception as e:
             logger.error(f"Error querying vector store: {e}")
             raise
 
         # If no query text is available, return vector-only retrieval.
         if not query_text:
-            formatted_results = vector_results[:n_results]
+            formatted_results = self._take_best_chunk_per_paper(vector_results, n_results, "vector_score")
             logger.info(f"Vector-only query returned {len(formatted_results)} results")
             return formatted_results
 
         self._ensure_bm25_index()
         if self._bm25 is None or not self._bm25_doc_ids:
-            formatted_results = vector_results[:n_results]
+            formatted_results = self._take_best_chunk_per_paper(vector_results, n_results, "vector_score")
             logger.info(f"Vector-only fallback returned {len(formatted_results)} results")
             return formatted_results
 
         bm25_scores = self._bm25.get_scores(self._tokenize(query_text))
         if len(bm25_scores) == 0:
-            formatted_results = vector_results[:n_results]
+            formatted_results = self._take_best_chunk_per_paper(vector_results, n_results, "vector_score")
             logger.info(f"Vector-only fallback returned {len(formatted_results)} results")
             return formatted_results
 
         bm25_score_min = float(np.min(bm25_scores))
         bm25_score_max = float(np.max(bm25_scores))
         bm25_denom = (bm25_score_max - bm25_score_min) if bm25_score_max > bm25_score_min else 1.0
+        rrf_k = RRF_K
 
-        top_bm25_idx = np.argsort(bm25_scores)[::-1][: n_results * 3]
+        vector_rank = {item["id"]: rank for rank, item in enumerate(vector_results, start=1)}
         hybrid_candidates: Dict[str, Dict[str, Any]] = {item["id"]: item for item in vector_results}
+        bm25_rank: Dict[str, int] = {}
+        lexical_rank = 0
 
-        for idx in top_bm25_idx:
+        for idx in np.argsort(bm25_scores)[::-1]:
             chunk_id = self._bm25_doc_ids[int(idx)]
             score_raw = float(bm25_scores[int(idx)])
             score_norm = (score_raw - bm25_score_min) / bm25_denom
             bm25_metadata = self._bm25_metadata_by_id.get(chunk_id, {})
             if not self._metadata_matches_filters(bm25_metadata, filters):
                 continue
+
+            lexical_rank += 1
+            if lexical_rank > candidate_limit:
+                break
+            bm25_rank[chunk_id] = lexical_rank
+
             if chunk_id in hybrid_candidates:
                 hybrid_candidates[chunk_id]["bm25_score"] = score_norm
                 continue
 
-            doc_text = self._bm25_docs[int(idx)]
             hybrid_candidates[chunk_id] = {
                 "id": chunk_id,
-                "text": doc_text,
+                "text": self._bm25_docs[int(idx)],
                 "metadata": bm25_metadata,
                 "distance": None,
                 "vector_score": 0.0,
                 "bm25_score": score_norm,
             }
 
-        alpha = float(os.getenv("HYBRID_VECTOR_WEIGHT", "0.7"))
-        alpha = min(max(alpha, 0.0), 1.0)
         for item in hybrid_candidates.values():
-            item["hybrid_score"] = (alpha * item.get("vector_score", 0.0)) + ((1.0 - alpha) * item.get("bm25_score", 0.0))
+            fused = 0.0
+            v_rank = vector_rank.get(item["id"])
+            b_rank = bm25_rank.get(item["id"])
+            if v_rank is not None:
+                fused += 1.0 / (rrf_k + v_rank)
+            if b_rank is not None:
+                fused += 1.0 / (rrf_k + b_rank)
+            item["hybrid_score"] = fused
 
-        ranked = sorted(hybrid_candidates.values(), key=lambda x: x.get("hybrid_score", 0.0), reverse=True)
-        formatted_results = ranked[:n_results]
+        ranked = sorted(
+            hybrid_candidates.values(),
+            key=lambda item: float(item.get("hybrid_score") or 0.0),
+            reverse=True,
+        )
+        formatted_results = self._take_best_chunk_per_paper(ranked, n_results, "hybrid_score")
 
         logger.info(f"Hybrid query returned {len(formatted_results)} results")
         return formatted_results
 
-    def get_facets(self, chunks: List[Dict[str, Any]], top_n_authors: int = 10) -> Dict[str, Any]:
+    def _take_best_chunk_per_paper(
+        self,
+        ranked: List[Dict[str, Any]],
+        n_results: int,
+        score_key: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Keep the highest-scoring chunk for each paper, then cut to n_results.
+
+        Chunk ids are left unchanged so citations can still point at one chunk.
+        """
+        best_by_paper: Dict[str, Dict[str, Any]] = {}
+        paper_order: List[str] = []
+
+        for item in ranked:
+            metadata = item.get("metadata") or {}
+            paper_id = metadata.get("doc_id")
+            paper_key = str(paper_id) if paper_id else f"chunk:{item.get('id')}"
+            current = best_by_paper.get(paper_key)
+            if current is None:
+                best_by_paper[paper_key] = item
+                paper_order.append(paper_key)
+                continue
+
+            current_score = float(current.get(score_key) or 0.0)
+            candidate_score = float(item.get(score_key) or 0.0)
+            if candidate_score > current_score:
+                best_by_paper[paper_key] = item
+
+        return [best_by_paper[paper_key] for paper_key in paper_order[:n_results]]
+
+    def _candidate_limit(self, n_results: int, filters: Optional[Dict[str, Any]]) -> int:
+        """How many neighbors to pull before paper dedupe and the final cut."""
+        categories = (filters or {}).get("categories") or []
+        authors = (filters or {}).get("authors") or []
+        if categories or authors:
+            return max(n_results * RETRIEVAL_FILTER_CANDIDATE_MULTIPLIER, RETRIEVAL_FILTER_CANDIDATE_FLOOR)
+        return n_results * RETRIEVAL_CANDIDATE_MULTIPLIER
+
+    def get_facets(self, chunks: List[Dict[str, Any]], top_n_authors: Optional[int] = None) -> Dict[str, Any]:
         """Build facet counts from retrieved chunks."""
+        if top_n_authors is None:
+            top_n_authors = FACET_TOP_AUTHORS
         years: Counter[int] = Counter()
         categories: Counter[str] = Counter()
         authors: Counter[str] = Counter()
@@ -363,7 +445,9 @@ class VectorStore:
         year = normalized.get("year")
 
         if isinstance(authors, str):
-            authors = [name.strip() for name in authors.split(" and ") if name.strip()]
+            # Stored records use either "and" (arXiv) or commas (older Chroma writes).
+            separator = " and " if " and " in authors else ","
+            authors = [name.strip() for name in authors.split(separator) if name.strip()]
         elif isinstance(authors, list):
             authors = [str(name).strip() for name in authors if str(name).strip()]
         else:
@@ -385,3 +469,22 @@ class VectorStore:
         normalized["categories"] = categories
         normalized["year"] = year
         return normalized
+
+    def _metadata_for_chroma(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Flatten metadata to the scalar types Chroma accepts."""
+        normalized = self._normalize_chunk_metadata(metadata)
+        chroma_metadata: Dict[str, Any] = {}
+        for key, value in normalized.items():
+            if key == "authors":
+                joined = " and ".join(value)
+                if joined:
+                    chroma_metadata[key] = joined
+                continue
+            if key == "categories":
+                joined = " ".join(value)
+                if joined:
+                    chroma_metadata[key] = joined
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                chroma_metadata[key] = value
+        return chroma_metadata

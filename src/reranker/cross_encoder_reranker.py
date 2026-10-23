@@ -1,9 +1,15 @@
 import logging
-import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 from sentence_transformers import CrossEncoder
+
+from src.settings import (
+    ENABLE_RERANKER,
+    RERANKER_MAX_CANDIDATES,
+    RERANKER_MIN_RAW_SCORE,
+    RERANKER_MODEL_NAME,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -14,12 +20,22 @@ class CrossEncoderReranker:
     """
 
     def __init__(self, model_name: Optional[str] = None):
-        self.model_name = model_name or os.getenv(
-            "RERANKER_MODEL_NAME", "cross-encoder/ms-marco-MiniLM-L-6-v2"
-        )
-        self.enabled = os.getenv("ENABLE_RERANKER", "true").lower() == "true"
-        self.max_candidates = int(os.getenv("RERANKER_MAX_CANDIDATES", "24"))
+        self.model_name = model_name or RERANKER_MODEL_NAME
+        self.enabled = ENABLE_RERANKER
+        self.max_candidates = RERANKER_MAX_CANDIDATES
+        self.min_raw_score = RERANKER_MIN_RAW_SCORE
         self._model: Optional[CrossEncoder] = None
+
+    def _drop_weak_hits(self, reranked: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Keep chunks whose raw cross-encoder score is at or above the cutoff."""
+        kept: List[Dict[str, Any]] = []
+        for item in reranked:
+            raw_score = item.get("reranker_score_raw")
+            if raw_score is None:
+                continue
+            if float(raw_score) >= self.min_raw_score:
+                kept.append(item)
+        return kept
 
     def _load_model(self) -> bool:
         if not self.enabled:
@@ -45,6 +61,11 @@ class CrossEncoderReranker:
         """
         if not candidates:
             return []
+        logger.info(
+            "Reranker received %s candidates (final_top_k=%s)",
+            len(candidates),
+            final_top_k,
+        )
         if not self._load_model():
             return candidates[:final_top_k]
         model = self._model
@@ -75,21 +96,14 @@ class CrossEncoderReranker:
             norm = (raw - score_min) / score_denom
             item_copy["reranker_score_raw"] = raw
             item_copy["reranker_score"] = norm
-            item_copy["hybrid_score"] = norm
             reranked.append(item_copy)
 
         reranked.sort(key=lambda x: x.get("reranker_score_raw", 0.0), reverse=True)
-
-        if final_top_k <= len(reranked):
-            return reranked[:final_top_k]
-
-        # If final_top_k is larger than reranked list, fill from remaining original candidates.
-        seen_ids = {item.get("id") for item in reranked if item.get("id")}
-        tail: List[Dict[str, Any]] = []
-        for item in candidates[len(capped_candidates) :]:
-            if item.get("id") in seen_ids:
-                continue
-            tail.append(item)
-            if len(reranked) + len(tail) >= final_top_k:
-                break
-        return reranked + tail
+        kept = self._drop_weak_hits(reranked)
+        logger.info(
+            "Reranker kept %s of %s candidates with raw score >= %.3f",
+            len(kept),
+            len(reranked),
+            self.min_raw_score,
+        )
+        return kept[:final_top_k]

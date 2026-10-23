@@ -1,0 +1,10 @@
+{"query":"Which paper discusses FedVLS for vacant classes in label-skewed federated learning?","relevant_chunk_ids":["2401.02329-0"],"top_k":8}
+{"query":"Which paper discusses DUAT for aligning translation-specific understanding with general understanding in large language models?","relevant_chunk_ids":["2401.05072-0"],"top_k":8}
+{"query":"Which paper discusses beta scoring rules for deep active learning in multi-label text classification?","relevant_chunk_ids":["2401.07395-0"],"top_k":8}
+{"query":"Which paper discusses RetroWISE for retrosynthesis prediction with in-silico reaction data?","relevant_chunk_ids":["2402.00086-0"],"top_k":8}
+{"query":"What does the abstract claim about task similarity and catastrophic forgetting in highly overparameterized continual linear regression?","relevant_chunk_ids":["2401.12617-0"],"top_k":8}
+{"query":"What does the abstract claim about Gossip Mutual Learning communication overhead versus FedAvg for brain tumor segmentation?","relevant_chunk_ids":["2401.15434-0"],"top_k":8}
+{"query":"What does the abstract claim Discrete Distribution Networks use to approximate a data distribution?","relevant_chunk_ids":["2401.00036-0"],"top_k":8}
+{"query":"Who published a cs.LG paper in 2024 on distributional reinforcement learning for energy arbitrage in the imbalance settlement mechanism?","relevant_chunk_ids":["2401.00015-0"],"top_k":8}
+{"query":"Who published a cs.LG paper in 2024 that introduces design patterns for hybrid modeling?","relevant_chunk_ids":["2401.00033-0"],"top_k":8}
+{"query":"Who published a cs.LG paper in 2024 on messenger RNA design with the expected partition function?","relevant_chunk_ids":["2401.00037-0"],"top_k":8}

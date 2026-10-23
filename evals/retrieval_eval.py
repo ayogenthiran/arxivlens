@@ -1,6 +1,5 @@
 import argparse
 import json
-import os
 import re
 import sys
 from dataclasses import dataclass
@@ -17,11 +16,18 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from src.settings import (
+    CITATION_GROUNDEDNESS_MIN,
+    DEFAULT_TOP_K,
+    EVAL_SUPPORT_THRESHOLD,
+    VECTOR_STORE_DIR,
+)
+
 @dataclass
 class EvalExample:
     query: str
     relevant_chunk_ids: List[str]
-    top_k: int = 8
+    top_k: int = DEFAULT_TOP_K
 
 
 def _normalize_chunk_id(value: Any) -> str:
@@ -42,7 +48,7 @@ def load_eval_set(path: Path) -> List[EvalExample]:
 
             query = str(payload.get("query", "")).strip()
             relevant_ids = payload.get("relevant_chunk_ids", [])
-            top_k = int(payload.get("top_k", 8))
+            top_k = int(payload.get("top_k", DEFAULT_TOP_K))
 
             if not query:
                 raise ValueError(f"Missing query at line {line_number}")
@@ -98,6 +104,32 @@ def answer_support_ratio(answer: str, context_chunks: Sequence[Dict[str, Any]]) 
     return supported / float(len(answer_tokens))
 
 
+def _cited_chunk_text(citation: Dict[str, Any], context_chunks: Sequence[Dict[str, Any]]) -> str:
+    """
+    Text of the chunk a citation points at.
+
+    Prefer the chunk id, then the arXiv id. Fall back to the prompt's
+    [Document N] position when those fields are absent.
+    """
+    chunk_id = str(citation.get("chunk_id") or "").strip()
+    arxiv_id = str(citation.get("arxiv_id") or "").strip()
+    if chunk_id or arxiv_id:
+        for chunk in context_chunks:
+            metadata = chunk.get("metadata") or {}
+            candidate_chunk = str(chunk.get("id") or metadata.get("chunk_id") or "")
+            candidate_paper = str(metadata.get("doc_id") or "")
+            if chunk_id and candidate_chunk == chunk_id:
+                return str(chunk.get("text", ""))
+            if not chunk_id and candidate_paper == arxiv_id:
+                return str(chunk.get("text", ""))
+        return ""
+
+    doc_id = citation.get("doc_id")
+    if isinstance(doc_id, int) and 1 <= doc_id <= len(context_chunks):
+        return str(context_chunks[doc_id - 1].get("text", ""))
+    return ""
+
+
 def citation_groundedness(citations: Sequence[Dict[str, Any]], context_chunks: Sequence[Dict[str, Any]]) -> float:
     """
     Fraction of citations whose quoted text appears in the cited document.
@@ -108,14 +140,11 @@ def citation_groundedness(citations: Sequence[Dict[str, Any]], context_chunks: S
     total = 0
     for citation in citations:
         total += 1
-        doc_id = citation.get("doc_id")
         quote = str(citation.get("quote", "")).strip()
-        if not isinstance(doc_id, int) or doc_id < 1 or doc_id > len(context_chunks):
-            continue
         if not quote:
             continue
-        doc_text = str(context_chunks[doc_id - 1].get("text", ""))
-        if quote.lower() in doc_text.lower():
+        doc_text = _cited_chunk_text(citation, context_chunks)
+        if doc_text and quote.lower() in doc_text.lower():
             valid += 1
     return valid / float(total) if total > 0 else 0.0
 
@@ -131,6 +160,7 @@ def run_eval(
     run_groundedness: bool,
     rerank: bool,
     support_threshold: float,
+    citation_threshold: float,
 ) -> Dict[str, Any]:
     from embeddings import EmbeddingModel
     from llm import LLMInterface
@@ -189,7 +219,7 @@ def run_eval(
             citation_score = citation_groundedness(citations, retrieved)
             support_scores.append(support)
             citation_scores.append(citation_score)
-            is_grounded = support >= support_threshold and citation_score >= 0.8
+            is_grounded = support >= support_threshold and citation_score >= citation_threshold
             if is_grounded:
                 grounded_passes += 1
             row.update(
@@ -247,10 +277,10 @@ def main() -> None:
     parser.add_argument("--eval-set", required=True, help="Path to JSONL eval set")
     parser.add_argument(
         "--vector-store-dir",
-        default=os.getenv("VECTOR_STORE_DIR", "data/vector_store"),
+        default=VECTOR_STORE_DIR,
         help="Vector store directory",
     )
-    parser.add_argument("--top-k", type=int, default=8, help="Default top-k for metrics")
+    parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K, help="Default top-k for metrics")
     parser.add_argument(
         "--run-groundedness",
         action="store_true",
@@ -260,8 +290,14 @@ def main() -> None:
     parser.add_argument(
         "--support-threshold",
         type=float,
-        default=0.55,
+        default=EVAL_SUPPORT_THRESHOLD,
         help="Minimum answer support ratio to pass groundedness.",
+    )
+    parser.add_argument(
+        "--citation-threshold",
+        type=float,
+        default=CITATION_GROUNDEDNESS_MIN,
+        help="Minimum citation groundedness to pass.",
     )
     parser.add_argument("--output", default="", help="Optional path to write full JSON results.")
     args = parser.parse_args()
@@ -270,6 +306,8 @@ def main() -> None:
         raise ValueError("--top-k must be >= 1")
     if not (0.0 <= args.support_threshold <= 1.0):
         raise ValueError("--support-threshold must be between 0 and 1")
+    if not (0.0 <= args.citation_threshold <= 1.0):
+        raise ValueError("--citation-threshold must be between 0 and 1")
 
     load_dotenv()
 
@@ -281,6 +319,7 @@ def main() -> None:
             run_groundedness=args.run_groundedness,
             rerank=args.rerank,
             support_threshold=args.support_threshold,
+            citation_threshold=args.citation_threshold,
         )
     except ModuleNotFoundError as exc:
         missing = getattr(exc, "name", None) or str(exc)

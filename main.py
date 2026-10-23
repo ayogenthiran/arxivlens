@@ -18,6 +18,21 @@ from src.vector_store import VectorStore
 from src.llm import LLMInterface
 from src.reranker import CrossEncoderReranker
 from src.api.server import APIServer  # Correct import (from server.py)
+from src.settings import (
+    DATA_DIR,
+    HOST,
+    HYBRID_BM25_MAX_DOCS,
+    INGEST_BATCH_DOCS,
+    INGEST_CATEGORIES,
+    INGEST_RETRY_BASE_DELAY_S,
+    INGEST_RETRY_MAX_ATTEMPTS,
+    INGEST_YEAR_MIN,
+    MAX_DOCS,
+    OUTPUT_DIR,
+    PORT,
+    RESET_INGEST,
+    VECTOR_STORE_DIR,
+)
 
 
 def _read_checkpoint(checkpoint_path: str) -> int:
@@ -43,7 +58,12 @@ def _append_chunks_jsonl(output_path: str, chunks: list[dict]) -> None:
             f.write("\n")
 
 
-def _with_retry(operation_name: str, operation, max_attempts: int = 4, base_delay_s: float = 1.0):
+def _with_retry(
+    operation_name: str,
+    operation,
+    max_attempts: int = INGEST_RETRY_MAX_ATTEMPTS,
+    base_delay_s: float = INGEST_RETRY_BASE_DELAY_S,
+):
     """
     Execute an operation with exponential backoff retries.
     Raises the final exception if all attempts fail.
@@ -74,7 +94,7 @@ def main():
     # Initialize components
     document_processor = DocumentProcessor()
     embedding_model = EmbeddingModel()
-    vector_store = VectorStore(persist_directory=os.getenv("VECTOR_STORE_DIR", "data/vector_store"))
+    vector_store = VectorStore(persist_directory=VECTOR_STORE_DIR)
     llm_interface = LLMInterface()
     reranker = CrossEncoderReranker()
 
@@ -84,17 +104,23 @@ def main():
     if "--process-data" in args:
         print("[INFO] Processing documents...")
         
-        data_dir = os.getenv("DATA_DIR", "data/raw")
-        output_dir = os.getenv("OUTPUT_DIR", "data/processed")
+        data_dir = DATA_DIR
+        output_dir = OUTPUT_DIR
         os.makedirs(output_dir, exist_ok=True)
 
-        batch_docs = int(os.getenv("INGEST_BATCH_DOCS", "250"))
-        max_docs = int(os.getenv("MAX_DOCS", "0"))
-        retry_max_attempts = int(os.getenv("INGEST_RETRY_MAX_ATTEMPTS", "4"))
-        retry_base_delay_s = float(os.getenv("INGEST_RETRY_BASE_DELAY_S", "1.0"))
+        batch_docs = INGEST_BATCH_DOCS
+        max_docs = MAX_DOCS
+        ingest_year_min = INGEST_YEAR_MIN
+        ingest_categories = {
+            item.strip()
+            for item in INGEST_CATEGORIES.split(",")
+            if item.strip()
+        }
+        retry_max_attempts = INGEST_RETRY_MAX_ATTEMPTS
+        retry_base_delay_s = INGEST_RETRY_BASE_DELAY_S
         checkpoint_path = os.path.join(output_dir, "ingest_checkpoint.json")
         chunks_jsonl_path = os.path.join(output_dir, "processed_chunks.jsonl")
-        reset_ingest = os.getenv("RESET_INGEST", "false").lower() == "true"
+        reset_ingest = RESET_INGEST
 
         if reset_ingest:
             if os.path.exists(checkpoint_path):
@@ -103,7 +129,17 @@ def main():
                 os.remove(chunks_jsonl_path)
 
         resume_from = _read_checkpoint(checkpoint_path)
-        print(f"[INFO] Ingestion config -> batch_docs={batch_docs}, max_docs={max_docs or 'ALL'}, resume_from={resume_from}")
+        hybrid_max_docs = HYBRID_BM25_MAX_DOCS
+        print(
+            f"[INFO] Ingestion config -> batch_docs={batch_docs}, max_docs={max_docs or 'ALL'}, "
+            f"resume_from={resume_from}, categories={sorted(ingest_categories) or 'ALL'}, "
+            f"year_min={ingest_year_min or 'ANY'}, store={VECTOR_STORE_DIR}"
+        )
+        if max_docs == 0 or max_docs > hybrid_max_docs:
+            print(
+                f"[WARN] This ingest can pass HYBRID_BM25_MAX_DOCS={hybrid_max_docs}. "
+                "Above that size, search drops BM25 and uses vectors only."
+            )
 
         embedding_model.load_model()
         vector_store.initialize()
@@ -132,8 +168,17 @@ def main():
                 f"docs/min={docs_per_min:.1f}, chunks/min={chunks_per_min:.1f}, eta={eta}"
             )
 
-        for idx, doc in enumerate(document_processor.iter_documents(data_dir)):
+        for idx, doc in enumerate(document_processor.iter_documents(data_dir, min_year=ingest_year_min)):
             if idx < resume_from:
+                continue
+
+            if ingest_categories and not ingest_categories.intersection(set(doc.get("categories") or [])):
+                continue
+
+            paper_year = doc.get("submission_year")
+            if not isinstance(paper_year, int):
+                paper_year = doc.get("year")
+            if ingest_year_min and (not isinstance(paper_year, int) or paper_year < ingest_year_min):
                 continue
 
             if max_docs > 0 and processed_docs >= max_docs:
@@ -154,17 +199,17 @@ def main():
             if chunks_with_embeddings is None:
                 raise RuntimeError("Embedding generation returned no chunks")
             embedded_chunks = chunks_with_embeddings
-            _append_chunks_jsonl(chunks_jsonl_path, embedded_chunks)
             _with_retry(
                 "vector store write",
                 lambda: vector_store.add_embeddings(embedded_chunks),
                 max_attempts=retry_max_attempts,
                 base_delay_s=retry_base_delay_s,
             )
+            _append_chunks_jsonl(chunks_jsonl_path, embedded_chunks)
 
             processed_docs += len(current_batch_docs)
             processed_chunks += len(embedded_chunks)
-            _write_checkpoint(checkpoint_path, resume_from + processed_docs)
+            _write_checkpoint(checkpoint_path, idx + 1)
             _log_progress("Batch done")
             current_batch_docs = []
 
@@ -179,16 +224,16 @@ def main():
             if chunks_with_embeddings is None:
                 raise RuntimeError("Embedding generation returned no chunks")
             embedded_chunks = chunks_with_embeddings
-            _append_chunks_jsonl(chunks_jsonl_path, embedded_chunks)
             _with_retry(
                 "vector store write",
                 lambda: vector_store.add_embeddings(embedded_chunks),
                 max_attempts=retry_max_attempts,
                 base_delay_s=retry_base_delay_s,
             )
+            _append_chunks_jsonl(chunks_jsonl_path, embedded_chunks)
             processed_docs += len(current_batch_docs)
             processed_chunks += len(embedded_chunks)
-            _write_checkpoint(checkpoint_path, resume_from + processed_docs)
+            _write_checkpoint(checkpoint_path, idx + 1)
             _log_progress("Final batch done")
 
         print(f"[INFO] Processed {processed_docs} documents into {processed_chunks} chunks in this run.")
@@ -205,10 +250,7 @@ def main():
         reranker=reranker,
     )
     
-    host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8000"))
-
-    api_server.run(host=host, port=port)
+    api_server.run(host=HOST, port=PORT)
 
 if __name__ == "__main__":
     main()

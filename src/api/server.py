@@ -1,24 +1,36 @@
 # src/api/server.py
 
+from contextlib import asynccontextmanager
+from typing import Any, Dict, List, Optional
+import logging
+import time
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
-from typing import List, Dict, Any, Optional
-import os
-import time
-import logging
 import uvicorn
+
+from src.llm.llm_interface import INSUFFICIENT_CONTEXT_ANSWER
+from src.settings import (
+    CORS_ALLOW_ORIGINS,
+    DEFAULT_TOP_K,
+    HOST,
+    MAX_QUERY_TOP_K,
+    PORT,
+    YEAR_MAX_BOUND,
+    YEAR_MIN_BOUND,
+)
 
 logger = logging.getLogger(__name__)
 
 class QueryRequest(BaseModel):
     """Request model for query endpoint"""
     query: str
-    top_k: int = Field(default=8, ge=1, le=50)
+    top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=MAX_QUERY_TOP_K)
     authors: List[str] = Field(default_factory=list)
     categories: List[str] = Field(default_factory=list)
-    year_min: Optional[int] = Field(default=None, ge=1900, le=2100)
-    year_max: Optional[int] = Field(default=None, ge=1900, le=2100)
+    year_min: Optional[int] = Field(default=None, ge=YEAR_MIN_BOUND, le=YEAR_MAX_BOUND)
+    year_max: Optional[int] = Field(default=None, ge=YEAR_MIN_BOUND, le=YEAR_MAX_BOUND)
 
     @model_validator(mode="after")
     def validate_year_range(self):
@@ -42,23 +54,30 @@ class APIServer:
     
     def __init__(self, embedding_model, vector_store, llm_interface, reranker=None):
         """Initialize the API server with injected components"""
-        self.app = FastAPI(
-            title="ArxivLens API",
-            description="API for ArxivLens",
-            version="1.0.0"
-        )
-
-        # Inject components
         self.embedding_model = embedding_model
         self.vector_store = vector_store
         self.llm_interface = llm_interface
         self.reranker = reranker
+        self.app = FastAPI(
+            title="ArxivLens API",
+            description="API for ArxivLens",
+            version="1.0.0",
+            lifespan=self._lifespan,
+        )
 
         # Register routes
         self._register_routes()
 
         # Configure CORS (important for frontend React app)
         self._configure_cors()
+
+    @asynccontextmanager
+    async def _lifespan(self, _app: FastAPI):
+        """Open the index and load the embedding model before the server accepts traffic."""
+        logger.info("Loading embedding model and vector store")
+        self.embedding_model.load_model()
+        self.vector_store.initialize()
+        yield
 
     def _register_routes(self):
         """Register API routes"""
@@ -70,8 +89,7 @@ class APIServer:
         @self.app.post("/api/query", response_model=QueryResponse)
         def query(request: QueryRequest):
             try:
-                max_top_k = int(os.getenv("MAX_QUERY_TOP_K", "20"))
-                effective_top_k = min(request.top_k, max_top_k)
+                effective_top_k = min(request.top_k, MAX_QUERY_TOP_K)
                 started_at = time.perf_counter()
                 rewritten_query = self.llm_interface.rewrite_query(request.query)
                 rewrite_elapsed = time.perf_counter() - started_at
@@ -81,12 +99,17 @@ class APIServer:
                 query_embedding = self.embedding_model.embed_query(rewritten_query)
                 embed_elapsed = time.perf_counter() - embed_started_at
 
-                # Retrieve relevant chunks
+                # Retrieve a wider set than top_k so the reranker can reorder
+                # unique papers, then cut the response back to top_k.
                 retrieval_started_at = time.perf_counter()
+                reranker_max_candidates = (
+                    self.reranker.max_candidates if self.reranker is not None else effective_top_k
+                )
+                retrieve_k = max(effective_top_k, reranker_max_candidates)
                 context_chunks = self.vector_store.query(
                     query_embedding=query_embedding,
                     query_text=rewritten_query,
-                    n_results=effective_top_k,
+                    n_results=retrieve_k,
                     filters={
                         "authors": request.authors,
                         "categories": request.categories,
@@ -106,14 +129,19 @@ class APIServer:
                 rerank_elapsed = time.perf_counter() - rerank_started_at
                 facets = self.vector_store.get_facets(context_chunks)
 
-                # Generate response
+                # Weak chunks are already gone. If none remain, do not ask the model to write.
                 generation_started_at = time.perf_counter()
-                llm_output = self.llm_interface.generate_response(
-                    query=request.query,
-                    context_chunks=context_chunks
-                )
-                answer = llm_output.get("answer", "No answer returned.")
-                citations = llm_output.get("citations", [])
+                if not context_chunks:
+                    answer = INSUFFICIENT_CONTEXT_ANSWER
+                    citations = []
+                    logger.info("Skipped answer generation because no chunks passed the reranker cutoff")
+                else:
+                    llm_output = self.llm_interface.generate_response(
+                        query=request.query,
+                        context_chunks=context_chunks
+                    )
+                    answer = llm_output.get("answer", "No answer returned.")
+                    citations = llm_output.get("citations", [])
                 generation_elapsed = time.perf_counter() - generation_started_at
                 total_elapsed = time.perf_counter() - started_at
                 logger.info(
@@ -134,8 +162,9 @@ class APIServer:
                     "query": request.query,
                     "rewritten_query": rewritten_query,
                 }
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
+            except Exception as exc:
+                logger.exception("Query failed")
+                raise HTTPException(status_code=500, detail="Query failed.") from exc
 
         @self.app.get("/api/health")
         async def health_check():
@@ -165,16 +194,13 @@ class APIServer:
                 }
             except HTTPException:
                 raise
-            except Exception as e:
-                raise HTTPException(status_code=503, detail={"status": "not_ready", "error": str(e)})
+            except Exception as exc:
+                logger.exception("Readiness check failed")
+                raise HTTPException(status_code=503, detail={"status": "not_ready"}) from exc
 
     def _configure_cors(self):
         """Configure CORS to allow frontend requests"""
-        raw_origins = os.getenv(
-            "CORS_ALLOW_ORIGINS",
-            "http://localhost:8501,http://127.0.0.1:8501",
-        )
-        allow_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+        allow_origins = [origin.strip() for origin in CORS_ALLOW_ORIGINS.split(",") if origin.strip()]
 
         self.app.add_middleware(
             CORSMiddleware,
@@ -184,16 +210,16 @@ class APIServer:
             allow_headers=["*"],
         )
 
-    def run(self, host: str = "0.0.0.0", port: int = 8000):
+    def run(self, host: Optional[str] = None, port: Optional[int] = None):
         """Run the API server"""
-        uvicorn.run(self.app, host=host, port=port)
+        uvicorn.run(self.app, host=host or HOST, port=port or PORT)
 
 # For ASGI servers
 app_instance = None
 app = None
 
-def create_app(embedding_model, vector_store, llm_interface):
+def create_app(embedding_model, vector_store, llm_interface, reranker=None):
     global app_instance, app
-    app_instance = APIServer(embedding_model, vector_store, llm_interface)
+    app_instance = APIServer(embedding_model, vector_store, llm_interface, reranker=reranker)
     app = app_instance.app
     return app

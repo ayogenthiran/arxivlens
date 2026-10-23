@@ -1,10 +1,12 @@
 # src/embeddings/embedding_model.py
 
-import os
 import logging
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 from sentence_transformers import SentenceTransformer
+
+from src.settings import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODEL_NAME
 
 # Set up basic logging configuration
 logging.basicConfig(level=logging.INFO)
@@ -22,7 +24,7 @@ class EmbeddingModel:
         Args:
             model_name: Name of the sentence-transformers model to use
         """
-        configured_name = model_name or os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
+        configured_name = model_name or EMBEDDING_MODEL_NAME
         self.model_name = self._normalize_model_name(configured_name)
         self.model = None
 
@@ -111,7 +113,7 @@ class EmbeddingModel:
 
         # OpenAI embedding model names are not valid SentenceTransformer model IDs.
         if normalized.startswith("text-embedding-"):
-            fallback = "all-MiniLM-L6-v2"
+            fallback = DEFAULT_EMBEDDING_MODEL
             logger.warning(
                 "EMBEDDING_MODEL_NAME='%s' is an OpenAI embedding model. "
                 "Falling back to sentence-transformers model '%s'.",
