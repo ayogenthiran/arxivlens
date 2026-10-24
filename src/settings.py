@@ -186,3 +186,6 @@ ARXIV_ABS_BASE_URL = env_str("ARXIV_ABS_BASE_URL", "https://arxiv.org/abs").rstr
 # Eval
 EVAL_SUPPORT_THRESHOLD = env_unit_float("EVAL_SUPPORT_THRESHOLD", 0.55)
 CITATION_GROUNDEDNESS_MIN = env_unit_float("CITATION_GROUNDEDNESS_MIN", 0.8)
+# Optional Semantic Scholar Graph API key. scripts/build_citation_benchmark.py
+# sends it as the x-api-key header. Empty uses the shared unauthenticated limit.
+S2_API_KEY = _raw("S2_API_KEY") or ""

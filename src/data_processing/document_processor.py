@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
@@ -166,6 +166,7 @@ class DocumentProcessor:
         )
         categories = self._normalize_categories(data.get("categories", []))
         year = self._extract_year(data)
+        submission_date = self._earliest_submission_date(data.get("versions"))
         title = re.sub(r"\s+", " ", str(data.get("title") or "")).strip()
         abstract = re.sub(r"\s+", " ", str(data.get("abstract") or "")).strip()
         paper_id = str(data.get("id") or "")
@@ -177,6 +178,8 @@ class DocumentProcessor:
             "authors": authors,
             "categories": categories,
             "year": year,
+            "submission_date": submission_date.isoformat() if submission_date else None,
+            "updated_year": self._updated_year(data),
             "submission_year": self._submission_year(paper_id),
             "text": abstract,
             "source": str(file_path),
@@ -213,6 +216,7 @@ class DocumentProcessor:
                 "authors": doc.get("authors", []),
                 "categories": doc.get("categories", []),
                 "year": doc.get("year"),
+                "updated_year": doc.get("updated_year"),
             }
             submission_year = doc.get("submission_year")
             if isinstance(submission_year, int):
@@ -325,41 +329,98 @@ class DocumentProcessor:
         return codes
 
     def _extract_year(self, data: Dict[str, Any]) -> int | None:
-        """Extract publication year from arXiv metadata fields."""
-        date_candidates: List[str] = []
-        update_date = data.get("update_date")
-        if isinstance(update_date, str):
-            date_candidates.append(update_date)
+        """Year the paper was first submitted, not the latest revision.
 
-        versions = data.get("versions", [])
-        if isinstance(versions, list):
-            for version in versions:
-                if not isinstance(version, dict):
-                    continue
-                created = version.get("created")
-                if isinstance(created, str):
-                    date_candidates.append(created)
+        ``update_date`` changes when a paper is revised, so a 2016 paper
+        updated in 2024 would pass a 2024 filter. Prefer the earliest
+        ``versions`` created date, then the year encoded in a modern arXiv
+        id, and use ``update_date`` only when both are missing.
+        """
+        earliest = self._earliest_version_year(data.get("versions"))
+        if earliest is not None:
+            return earliest
 
-        for date_value in date_candidates:
-            year = self._parse_year(date_value)
+        submission_year = self._submission_year(str(data.get("id") or ""))
+        if submission_year is not None:
+            return submission_year
+
+        return self._updated_year(data)
+
+    def _earliest_version_year(self, versions: Any) -> int | None:
+        """Year of the earliest parseable ``created`` date. List order is ignored."""
+        if not isinstance(versions, list):
+            return None
+        years: List[int] = []
+        for version in versions:
+            if not isinstance(version, dict):
+                continue
+            created = version.get("created")
+            if not isinstance(created, str):
+                continue
+            year = self._parse_year(created)
             if year is not None:
-                return year
-        return None
+                years.append(year)
+        if not years:
+            return None
+        return min(years)
 
-    def _parse_year(self, date_value: str) -> int | None:
-        """Parse a year from known arXiv date formats."""
+    def _earliest_submission_date(self, versions: Any) -> date | None:
+        """Calendar date of the earliest parseable version ``created`` value.
+
+        This is the first-submission date. ``update_date`` is the latest
+        revision and is not a fallback.
+        """
+        if not isinstance(versions, list):
+            return None
+        dates: List[date] = []
+        for version in versions:
+            if not isinstance(version, dict):
+                continue
+            created = version.get("created")
+            if not isinstance(created, str):
+                continue
+            parsed = self._parse_date(created)
+            if parsed is not None:
+                dates.append(parsed)
+        if not dates:
+            return None
+        return min(dates)
+
+    def _parse_date(self, date_value: str) -> date | None:
+        """Parse a calendar date from known arXiv date formats."""
         if not date_value:
             return None
         date_value = date_value.strip()
         for fmt in ("%Y-%m-%d", "%d %b %Y", "%a, %d %b %Y %H:%M:%S %Z"):
             try:
-                return datetime.strptime(date_value, fmt).year
+                return datetime.strptime(date_value, fmt).date()
             except ValueError:
                 continue
+        if len(date_value) >= 10 and date_value[4] == "-" and date_value[7] == "-":
+            try:
+                return datetime.strptime(date_value[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return None
+        return None
 
-        # Fallback for timestamps like "2007-05-23T17:46:05Z"
-        if len(date_value) >= 4 and date_value[:4].isdigit():
-            return int(date_value[:4])
+    def _updated_year(self, data: Dict[str, Any]) -> int | None:
+        """Year of ``update_date``, the latest revision date."""
+        update_date = data.get("update_date")
+        if not isinstance(update_date, str):
+            return None
+        return self._parse_year(update_date)
+
+    def _parse_year(self, date_value: str) -> int | None:
+        """Parse a year from known arXiv date formats."""
+        parsed = self._parse_date(date_value)
+        if parsed is not None:
+            return parsed.year
+        if not date_value:
+            return None
+        # Fallback for timestamps like "2007-05-23T17:46:05Z" and bare years.
+        stripped = date_value.strip()
+        if len(stripped) >= 4 and stripped[:4].isdigit():
+            return int(stripped[:4])
         return None
     
     def save_processed_chunks(self, chunks: List[Dict[str, Any]], output_dir: str) -> None:

@@ -2,7 +2,16 @@ hello.py
 /venv
 *.pyc
 __pycache__/
-data/
+.pytest_cache/
+.ruff_cache/
+/data/
+# Semantic Scholar response cache. A citation-benchmark re-run reads these files
+# and does not call the network. /data/ already ignores this path.
+/data/cache/
+
+# Generated citation-benchmark artifacts. The stats JSON is small and is checked in.
+evals/data/eval_corpus_ids.txt
+evals/data/citation_benchmark.jsonl
 node_modules/
 package-lock.json
 .env

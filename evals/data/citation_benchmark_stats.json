@@ -1,0 +1,10 @@
+{
+  "n_queries": 500,
+  "mean_relevant_per_query": 8.69,
+  "median_relevant_per_query": 6.0,
+  "pct_references_on_arxiv": 62.86,
+  "pct_references_in_corpus": 14.04,
+  "n_references": 32115,
+  "n_references_on_arxiv": 20188,
+  "n_references_in_corpus": 4509
+}
