@@ -1,0 +1,50 @@
+name: CI
+
+"on":
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check requirements files are UTF-8
+        run: |
+          python - << 'PY'
+          from pathlib import Path
+
+          paths = sorted(Path(".").glob("requirements*.txt"))
+          if not paths:
+              raise SystemExit("no requirements*.txt files found")
+          for path in paths:
+              data = path.read_bytes()
+              try:
+                  text = data.decode("utf-8")
+              except UnicodeDecodeError as exc:
+                  raise SystemExit(f"{path} is not valid UTF-8: {exc}") from exc
+              # UTF-16 text often decodes as UTF-8 with a null between characters.
+              # pip still cannot parse that file.
+              if "\x00" in text:
+                  raise SystemExit(f"{path} contains null bytes and is not UTF-8 text")
+          PY
+
+      - name: Install dev tools and lightweight import dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pip install numpy==2.2.5 rank-bm25==0.2.2 python-dotenv==1.1.0 requests==2.32.3
+
+      # chromadb, sentence-transformers, and torch are imported at module
+      # level. tests/conftest.py stubs them when they are missing so this job
+      # does not install those wheels.
+      - name: Ruff
+        run: ruff check .
+
+      - name: Pytest
+        run: pytest -q

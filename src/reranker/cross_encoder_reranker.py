@@ -14,9 +14,20 @@ from src.settings import (
 logger = logging.getLogger(__name__)
 
 
+def _sigmoid(raw_score: float) -> float:
+    """Map one cross-encoder logit to a relevance probability in (0, 1)."""
+    if raw_score >= 0.0:
+        return float(1.0 / (1.0 + np.exp(-raw_score)))
+    exp_raw = float(np.exp(raw_score))
+    return exp_raw / (1.0 + exp_raw)
+
+
 class CrossEncoderReranker:
     """
     Cross-encoder reranker that reorders retrieved chunks after first-pass retrieval.
+
+    ``reranker_score`` is sigmoid(raw logit), so the same number means the same
+    relevance on every query. It is not rescaled inside one result list.
     """
 
     def __init__(self, model_name: Optional[str] = None):
@@ -85,17 +96,12 @@ class CrossEncoderReranker:
         if scores.size == 0:
             return candidates[:final_top_k]
 
-        score_min = float(np.min(scores))
-        score_max = float(np.max(scores))
-        score_denom = (score_max - score_min) if score_max > score_min else 1.0
-
         reranked: List[Dict[str, Any]] = []
         for idx, item in enumerate(capped_candidates):
             item_copy = dict(item)
             raw = float(scores[idx])
-            norm = (raw - score_min) / score_denom
             item_copy["reranker_score_raw"] = raw
-            item_copy["reranker_score"] = norm
+            item_copy["reranker_score"] = _sigmoid(raw)
             reranked.append(item_copy)
 
         reranked.sort(key=lambda x: x.get("reranker_score_raw", 0.0), reverse=True)

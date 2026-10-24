@@ -1,10 +1,27 @@
 hello.py
+
+# Virtual environments
 /venv
+.venv/
+
+# Python
 *.pyc
+*.pyo
+*.pyd
 __pycache__/
+*.egg-info/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Local data, indexes, and logs. A clone does not include the corpus.
 /data/
+*.log
+
 # Semantic Scholar response cache. A citation-benchmark re-run reads these files
 # and does not call the network. /data/ already ignores this path.
 /data/cache/
@@ -12,10 +29,18 @@ __pycache__/
 # Generated citation-benchmark artifacts. The stats JSON is small and is checked in.
 evals/data/eval_corpus_ids.txt
 evals/data/citation_benchmark.jsonl
+
+# Secrets. .env.example stays tracked.
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Tooling
 node_modules/
 package-lock.json
-.env
+.DS_Store
+.codacy/
 
-
-#Ignore cursor AI rules
+# Ignore cursor AI rules
 .cursor/rules/codacy.mdc

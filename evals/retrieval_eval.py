@@ -23,6 +23,7 @@ from src.settings import (
     VECTOR_STORE_DIR,
 )
 
+
 @dataclass
 class EvalExample:
     query: str

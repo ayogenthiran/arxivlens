@@ -7,8 +7,8 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 import chromadb
-from chromadb.config import Settings
 import numpy as np
+from chromadb.config import Settings
 from rank_bm25 import BM25Okapi
 
 from src.settings import (
@@ -23,8 +23,6 @@ from src.settings import (
     RRF_K,
 )
 
-# Set up basic logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class VectorStore:
@@ -64,7 +62,7 @@ class VectorStore:
                     logger.info(f"Initialized PersistentClient at {self.persist_directory}")
                 else:
                     self.client = chromadb.Client(settings=Settings(anonymized_telemetry=ANONYMIZED_TELEMETRY))
-                    logger.info(f"Initialized In-Memory ChromaDB Client")
+                    logger.info("Initialized In-Memory ChromaDB Client")
                 
                 self.collection = self._get_or_create_collection()
             except Exception as e:
@@ -73,15 +71,55 @@ class VectorStore:
 
     def _get_or_create_collection(self):
         """
-        Get or create the collection.
+        Open the collection, or create it with cosine distance.
+
+        An existing collection is left in place. If its distance is not cosine,
+        a warning tells the user to re-ingest.
         """
         try:
             collection = self.client.get_collection(name=self.collection_name)
             logger.info(f"Using existing collection: {self.collection_name}")
+            self._warn_if_not_cosine(collection)
         except Exception:
-            collection = self.client.create_collection(name=self.collection_name)
+            collection = self.client.create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
             logger.info(f"Created new collection: {self.collection_name}")
         return collection
+
+    def _warn_if_not_cosine(self, collection) -> None:
+        space = self._hnsw_space(collection)
+        if space == "cosine":
+            return
+        shown = space if space else "unset (Chroma default l2)"
+        logger.warning(
+            "Collection '%s' uses hnsw:space=%s, not cosine. "
+            "Re-ingest into a new collection so vector_score is cosine similarity (1 - distance). "
+            "Existing data was not deleted or recreated.",
+            self.collection_name,
+            shown,
+        )
+
+    def _hnsw_space(self, collection=None) -> Optional[str]:
+        target = collection if collection is not None else self.collection
+        metadata = getattr(target, "metadata", None)
+        if not isinstance(metadata, dict):
+            return None
+        space = metadata.get("hnsw:space")
+        if space is None:
+            return None
+        text = str(space).strip().lower()
+        return text or None
+
+    def _vector_score(self, distance: Optional[float]) -> float:
+        """Cosine similarity for a cosine collection; the legacy L2 map otherwise."""
+        if distance is None:
+            return 0.0
+        distance_value = float(distance)
+        if self._hnsw_space() == "cosine":
+            return 1.0 - distance_value
+        return 1.0 / (1.0 + distance_value)
 
     def add_embeddings(self, chunks: List[Dict[str, Any]]) -> None:
         """
@@ -193,7 +231,7 @@ class VectorStore:
         formatted_results = []
         for i in range(len(results["ids"][0])):
             distance = results.get("distances", [[]])[0][i] if "distances" in results else None
-            vector_score = 1.0 / (1.0 + distance) if distance is not None else 0.0
+            vector_score = self._vector_score(distance)
             formatted_results.append({
                 "id": results["ids"][0][i],
                 "text": results["documents"][0][i],
@@ -225,10 +263,10 @@ class VectorStore:
         if self.collection is None:
             self.initialize()
 
-        # Oversample so one chunk per paper can still fill n_results after
-        # overlapping abstract chunks collapse. Category and author filters
-        # run after Chroma returns, so those queries need a wider pool first.
-        # Year bounds stay in the Chroma where clause.
+        # Ask for more neighbors than n_results so one chunk per paper can
+        # still fill the list. Category and author filters run after Chroma
+        # returns, so those queries need a wider pool. Year bounds stay in
+        # the Chroma where clause.
         candidate_limit = self._candidate_limit(n_results, filters)
 
         try:

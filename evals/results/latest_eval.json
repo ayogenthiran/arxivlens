@@ -1,0 +1,199 @@
+{
+  "num_queries": 10,
+  "metrics": {
+    "recall@8": 1.0,
+    "mrr": 1.0
+  },
+  "per_query": [
+    {
+      "query": "Which paper discusses FedVLS for vacant classes in label-skewed federated learning?",
+      "top_k": 8,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieved_ids": [
+        "2401.02329-0",
+        "2402.05353-0",
+        "2401.11750-0",
+        "2401.02586-0",
+        "2402.00342-0",
+        "2401.00622-0",
+        "2401.09986-0",
+        "2401.17319-0"
+      ],
+      "relevant_chunk_ids": [
+        "2401.02329-0"
+      ]
+    },
+    {
+      "query": "Which paper discusses DUAT for aligning translation-specific understanding with general understanding in large language models?",
+      "top_k": 8,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieved_ids": [
+        "2401.05072-0",
+        "2401.14373-0",
+        "2401.06468-0",
+        "2401.05861-0",
+        "2401.12097-0",
+        "2402.02080-0",
+        "2401.16247-0",
+        "2401.08350-0"
+      ],
+      "relevant_chunk_ids": [
+        "2401.05072-0"
+      ]
+    },
+    {
+      "query": "Which paper discusses beta scoring rules for deep active learning in multi-label text classification?",
+      "top_k": 8,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieved_ids": [
+        "2401.07395-0",
+        "2401.16549-0",
+        "2401.09787-0",
+        "2402.02110-0",
+        "2402.04896-0",
+        "2401.04305-0",
+        "2401.07367-0",
+        "2401.16594-0"
+      ],
+      "relevant_chunk_ids": [
+        "2401.07395-0"
+      ]
+    },
+    {
+      "query": "Which paper discusses RetroWISE for retrosynthesis prediction with in-silico reaction data?",
+      "top_k": 8,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieved_ids": [
+        "2402.00086-0",
+        "2401.14637-0",
+        "2401.10721-0",
+        "2401.04478-0",
+        "2402.04852-0",
+        "2401.17174-0",
+        "2402.05200-0",
+        "2401.03369-0"
+      ],
+      "relevant_chunk_ids": [
+        "2402.00086-0"
+      ]
+    },
+    {
+      "query": "What does the abstract claim about task similarity and catastrophic forgetting in highly overparameterized continual linear regression?",
+      "top_k": 8,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieved_ids": [
+        "2401.12617-0",
+        "2401.11667-0",
+        "2401.03129-0",
+        "2401.11666-0",
+        "2402.01348-0",
+        "2401.08295-0",
+        "2401.02576-0",
+        "2401.09181-0"
+      ],
+      "relevant_chunk_ids": [
+        "2401.12617-0"
+      ]
+    },
+    {
+      "query": "What does the abstract claim about Gossip Mutual Learning communication overhead versus FedAvg for brain tumor segmentation?",
+      "top_k": 8,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieved_ids": [
+        "2401.15434-0",
+        "2401.06180-0",
+        "2401.06499-0",
+        "2402.05218-0",
+        "2401.09498-0",
+        "2402.04193-0",
+        "2401.01303-0",
+        "2401.08404-0"
+      ],
+      "relevant_chunk_ids": [
+        "2401.15434-0"
+      ]
+    },
+    {
+      "query": "What does the abstract claim Discrete Distribution Networks use to approximate a data distribution?",
+      "top_k": 8,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieved_ids": [
+        "2401.00036-0",
+        "2402.05309-0",
+        "2401.12014-0",
+        "2401.11726-0",
+        "2402.03701-0",
+        "2402.03814-0",
+        "2402.00957-0",
+        "2402.04362-0"
+      ],
+      "relevant_chunk_ids": [
+        "2401.00036-0"
+      ]
+    },
+    {
+      "query": "Who published a cs.LG paper in 2024 on distributional reinforcement learning for energy arbitrage in the imbalance settlement mechanism?",
+      "top_k": 8,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieved_ids": [
+        "2401.00015-0",
+        "2401.13947-0",
+        "2401.07710-0",
+        "2401.05710-0",
+        "2401.02325-0",
+        "2401.13884-0",
+        "2402.01900-0",
+        "2401.02653-0"
+      ],
+      "relevant_chunk_ids": [
+        "2401.00015-0"
+      ]
+    },
+    {
+      "query": "Who published a cs.LG paper in 2024 that introduces design patterns for hybrid modeling?",
+      "top_k": 8,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieved_ids": [
+        "2401.00033-0",
+        "2401.06779-0",
+        "2401.02008-0",
+        "2401.13836-0",
+        "2401.14609-0",
+        "2401.18047-0",
+        "2401.10839-0",
+        "2401.14423-0"
+      ],
+      "relevant_chunk_ids": [
+        "2401.00033-0"
+      ]
+    },
+    {
+      "query": "Who published a cs.LG paper in 2024 on messenger RNA design with the expected partition function?",
+      "top_k": 8,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieved_ids": [
+        "2401.00037-0",
+        "2401.03571-0",
+        "2401.06151-0",
+        "2401.12232-0",
+        "2401.05351-0",
+        "2402.03736-0",
+        "2401.14749-0",
+        "2401.03545-0"
+      ],
+      "relevant_chunk_ids": [
+        "2401.00037-0"
+      ]
+    }
+  ]
+}

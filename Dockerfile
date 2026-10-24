@@ -10,10 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.docker /app/requirements.docker
+COPY requirements.txt /app/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --index-url https://download.pytorch.org/whl/cpu torch==2.7.0 && \
-    pip install -r /app/requirements.docker
+    pip install -r /app/requirements.txt
 
 COPY . /app
 

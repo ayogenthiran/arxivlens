@@ -75,6 +75,21 @@ class ExtractYearTests(unittest.TestCase):
         self.assertIsNone(doc["year"])
         self.assertIsNone(doc["updated_year"])
 
+    def test_long_abstract_stays_one_chunk(self):
+        abstract = "Sentence about retrieval. " * 80
+        data = {
+            "id": "2401.00001",
+            "title": "A long abstract",
+            "abstract": abstract,
+            "update_date": "2024-02-01",
+            "versions": [{"version": "v1", "created": "Thu, 1 Feb 2024 00:00:00 GMT"}],
+        }
+        doc = self.processor._build_document(data, Path("snapshot.json"))
+        chunks = self.processor.chunk_documents([doc])
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0]["metadata"]["chunk_id"], "2401.00001-0")
+        self.assertEqual(chunks[0]["text"], f"A long abstract\n\n{abstract.strip()}")
+
 
 if __name__ == "__main__":
     unittest.main()

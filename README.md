@@ -1,206 +1,186 @@
 # ArxivLens
 
-ArxivLens is a Retrieval-Augmented Generation (RAG) application that leverages vector databases and large language models to provide accurate, context-aware responses based on specific knowledge domains.
+ArxivLens is a paper-discovery tool for Master's and PhD students. It searches arXiv metadata (title, abstract, authors, categories, and year), reranks the short list, and answers with citations that open the paper on arxiv.org.
 
-## Overview
+## Status
 
-This repository implements a complete RAG pipeline with a user-friendly web interface. The system retrieves relevant information from a vector database containing embedded documents and uses this context to generate accurate responses through a large language model.
-
-## Features
-
-- **Document Processing Pipeline**: Ingest, chunk, and embed documents from various sources
-- **Vector Database Integration**: Store and efficiently query document embeddings
-- **Semantic Search**: Find the most relevant context for user queries
-- **Cross-Encoder Reranking**: Re-rank retrieved chunks after retrieval for better precision
-- **LLM Integration**: Generate contextually accurate responses using retrieved information
-- **Web Interface**: User-friendly UI for interacting with the RAG system
-- **API Endpoints**: RESTful API for programmatic access to the RAG pipeline
-- **Performance Metrics**: Evaluation tools to measure retrieval and generation quality
+The live corpus is 5,000 recent `cs.CL` and `cs.LG` papers, one chunk each, in `data/vector_store_corpus`. Ingest kept papers whose modern arXiv id is from 2024 onward and that list `cs.CL` or `cs.LG`. The full Kaggle archive in `data/vector_store` is optional. The app reads whichever directory `VECTOR_STORE_DIR` points at. `data/` is gitignored, so a clone does not include either index.
 
 ## Architecture
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│                 │     │                 │     │                 │
-│  Data Ingestion │────▶│ Vector Database │────▶│  LLM Interface  │
-│                 │     │                 │     │                 │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-        │                       ▲                       │
-        │                       │                       │
-        ▼                       │                       ▼
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│                 │     │                 │     │                 │
-│ Text Processing │     │  Query Engine   │◀────│   Web Server    │
-│                 │     │                 │     │                 │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-```
+Ingest and query are drawn in [architecture.md](architecture.md).
 
-The current ingest and query paths are drawn in [architecture.md](architecture.md).
+## Quickstart
 
-## Dataset
+Python 3.11 or newer. Docker is optional. The API listens on port 8000. The Streamlit UI listens on port 8501.
 
-This project uses the [ArXiv Dataset](https://www.kaggle.com/datasets/Cornell-University/arxiv) containing scientific papers across various domains. The dataset provides rich, technical content perfect for demonstrating RAG capabilities in specialized knowledge retrieval.
+### Local
 
-## Technologies Used
-
-- **Backend**: Python, FastAPI
-- **Vector Database**: Chroma
-- **Embeddings**: Sentence-Transformers
-- **LLM Integration**: OpenAI API (with option for local models)
-- **Frontend**: Streamlit
-- **Containerization**: Docker
-- **Testing**: Pytest
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.9+
-- Docker (optional)
-
-### 🛠️ Installation
-
-1. Clone the repository
 ```bash
-git clone https://github.com/fkhadivpour/RAG-Application.git
-```
-
-2. Set up the Python environment
-```bash
+git clone https://github.com/ayogenthiran/arxivlens.git
+cd arxivlens
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+source venv/bin/activate  # Windows: venv\Scripts\activate
+uv sync --frozen
+# or, without uv: pip install -r requirements.txt
+cp .env.example .env
 ```
 
-3. Set up environment variables
-```bash
-cp .env.example .env
-# Edit .env with your API keys and configuration
-```
+Set `OPENAI_API_KEY` in `.env`. To query the live corpus, also set:
 
 ```env
-HOST=127.0.0.1
-PORT=8000
-DATA_DIR=data/raw
-OUTPUT_DIR=data/processed
-VECTOR_STORE_DIR=data/vector_store
-EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
-OPENAI_API_KEY=your-openai-key-here
-OPENAI_API_BASE=https://api.openai.com/v1
-MAX_QUERY_TOP_K=20
-HYBRID_BM25_MAX_DOCS=50000
-ENABLE_RERANKER=true
-RERANKER_MODEL_NAME=cross-encoder/ms-marco-MiniLM-L-6-v2
-RERANKER_MAX_CANDIDATES=24
-RERANKER_MIN_RAW_SCORE=1
-UI_DEFAULT_TOP_K=8
-UI_MIN_TOP_K=3
-UI_MAX_TOP_K=20
+OUTPUT_DIR=data/processed_corpus
+VECTOR_STORE_DIR=data/vector_store_corpus
 ```
 
-3. **Process Data** (one-time to populate vector store):
+Start the API and the UI in two terminals:
+
+```bash
+python main.py
+streamlit run streamlit_app.py --server.port 8501
+```
+
+API: http://127.0.0.1:8000
+
+UI: http://localhost:8501
+
+Ask a question in the UI. Advanced settings change how many sources to retrieve and can filter by category, author, and year.
+
+### Docker
+
+`docker-compose.yml` builds one image and runs the API and the UI. The API container sets `HOST=0.0.0.0` so the published port is reachable. The UI calls the API at `http://api:8000`. Both services mount `./data`.
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+API: http://127.0.0.1:8000
+
+UI: http://localhost:8501
+
+Ingest is a separate Compose profile and does not start with `up`:
+
+```bash
+docker compose --profile ingest run --rm ingest
+```
+
+## Configuration
+
+Defaults live in `src/settings.py`. A `.env` file overrides them. `load_dotenv()` does not replace variables already set in the process.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `HOST` | `127.0.0.1` | API bind address. Compose sets `0.0.0.0`. |
+| `PORT` | `8000` | API port. |
+| `UI_PORT` | `8501` | Streamlit port in Compose. |
+| `API_BASE_URL` | `http://127.0.0.1:8000` | Where the UI sends queries. Compose sets `http://api:8000`. |
+| `OPENAI_API_KEY` | | Key for the chat model. Answers fail without it. |
+| `OPENAI_API_BASE` | `https://api.openai.com/v1` | OpenAI-compatible base URL. |
+| `LLM_MODEL_NAME` | `gpt-4o-mini` | Answer model. |
+| `EMBEDDING_MODEL_NAME` | `all-MiniLM-L6-v2` | Document and query embeddings. |
+| `DATA_DIR` | `data/raw` | Directory of the metadata snapshot. |
+| `OUTPUT_DIR` | `data/processed` | Checkpoint and `processed_chunks.jsonl`. |
+| `VECTOR_STORE_DIR` | `data/vector_store` | Chroma directory. The live corpus is `data/vector_store_corpus`. |
+| `MAX_DOCS` | `0` | Ingest cap. `0` means no cap. The live corpus used `5000`. |
+| `INGEST_CATEGORIES` | empty | Comma-separated arXiv categories. Empty means every category. |
+| `INGEST_YEAR_MIN` | `0` | Skip papers submitted before this year. `0` means any year. |
+| `RESET_INGEST` | `false` | Delete the checkpoint and the chunk sidecar. Does not delete Chroma. |
+| `ENABLE_RERANKER` | `true` | Cross-encoder rerank after retrieval. |
+| `RERANKER_MIN_RAW_SCORE` | `1` | Drop chunks whose raw cross-encoder logit is below this. |
+| `ENABLE_QUERY_REWRITE` | `false` | When false, retrieval uses the query as typed. |
+| `HYBRID_BM25_MAX_DOCS` | `50000` | Above this size, search is vector-only. |
+| `UI_DEFAULT_TOP_K` | `8` | Default number of sources. The API caps this at `MAX_QUERY_TOP_K` (20). |
+
+`requirements.txt` is the install source for pip and Docker. Keep its pins aligned with `pyproject.toml`, including the PyTorch CPU index. `chromadb==1.0.7` stays paired with `posthog==3.25.0`.
+
+## Ingest
+
+Put the Kaggle arXiv metadata file at `data/raw/arxiv-metadata-oai-snapshot.json` ([Cornell arXiv dataset](https://www.kaggle.com/datasets/Cornell-University/arxiv)). `main.py` either ingests or serves the API. One process does not do both.
+
+The settings that built the live corpus:
+
+```env
+OUTPUT_DIR=data/processed_corpus
+VECTOR_STORE_DIR=data/vector_store_corpus
+MAX_DOCS=5000
+INGEST_CATEGORIES=cs.CL,cs.LG
+INGEST_YEAR_MIN=2024
+RESET_INGEST=false
+```
 
 ```bash
 python main.py --process-data
 ```
 
-4. **Start Backend Server**:
+That writes one chunk per paper into Chroma and appends the same batch to `processed_chunks.jsonl`. `ingest_checkpoint.json` stores how many source lines have been read. The next run skips lines below that count. `MAX_DOCS=0` walks the snapshot with no paper cap. A run that can pass 50,000 papers prints a warning that BM25 will turn off.
+
+## Tests
 
 ```bash
-python main.py
+pip install -r requirements-dev.txt
+pytest -q
+ruff check .
 ```
 
-Backend will run on:
-```
-http://127.0.0.1:8000
-```
+Tests do not need the network, `OPENAI_API_KEY`, or a model download. Missing `chromadb`, `sentence-transformers`, and `torch` are stubbed in `tests/conftest.py`. CI on Python 3.11 runs the same ruff and pytest commands.
 
----
+## Evaluation
 
-## 💾 Frontend Setup (Streamlit)
-
-1. **Start Frontend Server**:
+`evals/retrieval_eval.py` scores a JSONL query set against the local index. It does not write to the index. The embedding model downloads on first use. `--run-groundedness` also calls the chat model and needs `OPENAI_API_KEY`.
 
 ```bash
-streamlit run streamlit_app.py
+python evals/retrieval_eval.py --eval-set evals/abstract_questions.jsonl
+python evals/retrieval_eval.py \
+  --eval-set evals/abstract_questions.jsonl \
+  --output evals/results/latest_eval.json
 ```
 
-Frontend will open at:
-```
-http://localhost:8501
-```
+`evals/results/latest_eval.json` records 10 queries from `evals/abstract_questions.jsonl`: Recall@8 = 1.0 and MRR = 1.0. Each gold chunk is rank 1. Those queries include distinctive title terms from the target paper, so this is a known-item lookup check. A perfect score shows the index can return that paper when the query already contains those terms. It is not a measure of discovery quality. Field definitions are in `evals/README.md`.
 
----
-
-## 🚀 Usage Flow
-
-- Open [http://localhost:3000](http://localhost:3000)
-- Type a query related to your documents (e.g., "What is machine learning?")
-- Tune **Sources to retrieve** to trade-off breadth vs latency.
-- Click "Ask"
-- See AI-generated answer, rewritten retrieval query, and per-source relevance score.
-
----
-
-## 📂 Project Structure
+## Project structure
 
 ```
-RAG-Application/
-├── data/
-│   ├── raw/               # Raw ArXiv JSON documents
-│   ├── processed/         # Processed chunks
-│   └── vector_store/      # ChromaDB persisted vectors
-├── docker/                # (empty) - reserved for Docker configs
-├── notebooks/             # (empty) - reserved for experiments
-├── scripts/               # (empty) - reserved for automation scripts
-├── src/                   # Python backend source code
+.
+├── .github/workflows/     # ruff and pytest
+├── assets/                # UI logo
+├── data/                  # gitignored; present after you add a snapshot or index
+│   ├── arxiv/             # extra local copy of the snapshot
+│   ├── raw/
+│   ├── processed/         # full-archive checkpoint and sidecar
+│   ├── processed_corpus/  # live-corpus checkpoint and sidecar
+│   ├── vector_store/      # optional full archive
+│   └── vector_store_corpus/
+├── evals/
+│   └── results/
+├── src/
 │   ├── api/
 │   ├── data_processing/
 │   ├── embeddings/
 │   ├── llm/
-│   ├── vector_store/
-│   └── evaluation/        # (optional future) evaluation code
-├── .env                   # Backend-specific environment
-├── main.py                # Backend entry point
-├── streamlit_app.py       # Streamlit frontend entry point
-└── README.md              # (this file)
+│   ├── reranker/
+│   ├── ui/
+│   └── vector_store/
+└── tests/
 ```
 
----
+Entry points: `main.py` (ingest or API), `streamlit_app.py` (UI), `docker-compose.yml`, `Dockerfile`.
 
-## 📋 Notes
+## Limitations
 
-- Download the ArXiv dataset json file from kaggle into data/raw folder.
-- Backend and Frontend must be running simultaneously in separate terminals.
-- Keep `requirements.txt` and `requirements.docker` aligned for reproducible local and container deploys.
-- `chromadb==1.0.7` must stay paired with `posthog==3.25.0` because Chroma's telemetry initialization path is not compatible with newer PostHog versions. If you change one, validate Chroma startup and update both requirements files together.
+- Search covers title and abstract metadata, not the PDF.
+- The live set is 5,000 papers, not the archive. 273 of them store `year` 2023 because `year` is the first submission date, which can be earlier than the 2024 id.
+- The full archive still has multiple chunks per paper from an older ingest (5,209,090 chunk ids, 3,021,737 of them ending in `-0`). It is above 50,000 documents, so BM25 stays off.
+- The live corpus uses cosine distance. The full archive is still L2, and an existing collection is not converted in place.
+- Query rewriting is implemented and left off.
+- Keyword search loads every chunk into memory.
 
----
+## Roadmap
 
-## 📈 Future Improvements
+- Grow the live corpus with `MAX_DOCS`, `INGEST_CATEGORIES`, and `INGEST_YEAR_MIN`, and keep it under 50,000 papers so keyword search stays on.
+- Add eval questions that do not repeat the paper's distinctive title terms.
+- Turn query rewriting on only if a rewrite improves retrieval.
 
-- Add Docker support
-- Add unit tests inside `/tests/`
-- Improve frontend UI/UX
-- Support PDF and DOCX ingestion
+## Acknowledgements
 
----
-
-## 📝 Quick Developer Commands
-
-| Action | Command |
-|:-------|:--------|
-| Process documents | `python main.py --process-data` |
-| Start backend server | `python main.py` |
-| Start frontend server | `streamlit run streamlit_app.py` |
-
----
-
-# ✅ Full Stack Ready!
-
-- FastAPI + ChromaDB + OpenAI + Streamlit
-- Fully modular and professional RAG application
-- Easy to extend, deploy, and scale
-
----
-
+<!-- TODO(Anojan): credit original template if this repo was derived from one -->

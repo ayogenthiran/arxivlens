@@ -1,0 +1,53 @@
+# Declare dependencies here. uv.lock is the lockfile for `uv sync --frozen`.
+# requirements.txt is the UTF-8 install source for pip and Docker.
+# Keep its direct pins aligned with this list, including the chromadb/posthog comment
+# and `--extra-index-url https://download.pytorch.org/whl/cpu`.
+[project]
+name = "arxivlens"
+version = "0.1.0"
+description = "Retrieval-augmented search over arXiv papers"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.9",
+    "uvicorn==0.34.2",
+    "streamlit==1.44.1",
+    "requests==2.32.3",
+    "python-dotenv==1.1.0",
+    "pydantic==2.11.3",
+    "numpy==2.2.5",
+    # chromadb 1.0.7 initializes telemetry with posthog 3.25.0. Newer posthog breaks startup.
+    "chromadb==1.0.7",
+    "posthog==3.25.0",
+    "sentence-transformers==4.1.0",
+    "rank-bm25==0.2.2",
+    # CPU wheel. The default PyPI torch build is not the one Docker installs.
+    "torch==2.7.0",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Imports stay below sys.path setup. Ruff cannot move them without changing startup.
+"evals/retrieval_eval.py" = ["E402"]
+"main.py" = ["E402"]
+# Long prompt, log, and markup lines. ruff check --fix does not reflow them.
+"src/api/server.py" = ["E501"]
+"src/llm/llm_interface.py" = ["E501"]
+"streamlit_app.py" = ["E501"]

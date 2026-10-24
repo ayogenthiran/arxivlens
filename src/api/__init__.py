@@ -1,3 +1,3 @@
-from .server import APIServer, app
+from .server import APIServer
 
-__all__ = ["APIServer", "app"]
+__all__ = ["APIServer"]

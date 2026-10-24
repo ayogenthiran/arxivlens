@@ -1,14 +1,14 @@
 # src/api/server.py
 
-from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
 import logging
 import time
+from contextlib import asynccontextmanager
+from typing import Any, Dict, List, Optional
 
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
-import uvicorn
 
 from src.llm.llm_interface import INSUFFICIENT_CONTEXT_ANSWER
 from src.settings import (
@@ -41,6 +41,8 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     """Response model for query endpoint"""
     answer: str
+    summary: str = ""
+    points: List[Dict[str, Any]] = Field(default_factory=list)
     citations: List[Dict[str, Any]]
     context_chunks: List[Dict[str, Any]]
     facets: Dict[str, Any]
@@ -61,14 +63,10 @@ class APIServer:
         self.app = FastAPI(
             title="ArxivLens API",
             description="API for ArxivLens",
-            version="1.0.0",
+            version="0.1.0",
             lifespan=self._lifespan,
         )
-
-        # Register routes
         self._register_routes()
-
-        # Configure CORS (important for frontend React app)
         self._configure_cors()
 
     @asynccontextmanager
@@ -133,6 +131,8 @@ class APIServer:
                 generation_started_at = time.perf_counter()
                 if not context_chunks:
                     answer = INSUFFICIENT_CONTEXT_ANSWER
+                    summary = answer
+                    points = []
                     citations = []
                     logger.info("Skipped answer generation because no chunks passed the reranker cutoff")
                 else:
@@ -141,6 +141,10 @@ class APIServer:
                         context_chunks=context_chunks
                     )
                     answer = llm_output.get("answer", "No answer returned.")
+                    summary = str(llm_output.get("summary", answer))
+                    points = llm_output.get("points") or []
+                    if not isinstance(points, list):
+                        points = []
                     citations = llm_output.get("citations", [])
                 generation_elapsed = time.perf_counter() - generation_started_at
                 total_elapsed = time.perf_counter() - started_at
@@ -156,6 +160,8 @@ class APIServer:
 
                 return {
                     "answer": answer,
+                    "summary": summary,
+                    "points": points,
                     "citations": citations,
                     "context_chunks": context_chunks,
                     "facets": facets,
@@ -213,13 +219,3 @@ class APIServer:
     def run(self, host: Optional[str] = None, port: Optional[int] = None):
         """Run the API server"""
         uvicorn.run(self.app, host=host or HOST, port=port or PORT)
-
-# For ASGI servers
-app_instance = None
-app = None
-
-def create_app(embedding_model, vector_store, llm_interface, reranker=None):
-    global app_instance, app
-    app_instance = APIServer(embedding_model, vector_store, llm_interface, reranker=reranker)
-    app = app_instance.app
-    return app

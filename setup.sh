@@ -18,7 +18,7 @@ fi
 echo "Setup complete. ✅"
 echo ""
 echo "Next steps:"
-echo "1) pip install -r requirements.txt"
+echo "1) pip install -r requirements.txt   # or: uv sync --frozen"
 echo "2) python main.py --process-data   # one-time"
 echo "3) python main.py                  # backend"
 echo "4) streamlit run streamlit_app.py  # frontend"

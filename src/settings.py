@@ -127,10 +127,15 @@ if YEAR_MIN_BOUND > YEAR_MAX_BOUND:
 # Models
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_MODEL_NAME = env_str("EMBEDDING_MODEL_NAME", DEFAULT_EMBEDDING_MODEL)
+# all-MiniLM-L6-v2 truncates at 256 tokens. Overlap keeps a sentence that
+# would otherwise be cut between two windows inside at least one of them.
+EMBEDDING_WINDOW_OVERLAP_TOKENS = env_int_min("EMBEDDING_WINDOW_OVERLAP_TOKENS", 32, 0)
+EMBEDDING_ENCODE_BATCH_SIZE = env_int_min("EMBEDDING_ENCODE_BATCH_SIZE", 32, 1)
 LLM_MODEL_NAME = env_str("LLM_MODEL_NAME", "gpt-4o-mini")
 QUERY_REWRITE_MODEL = env_str("QUERY_REWRITE_MODEL", "")
 ENABLE_QUERY_REWRITE = env_bool("ENABLE_QUERY_REWRITE", False)
 OPENAI_API_BASE = env_str("OPENAI_API_BASE", "https://api.openai.com/v1").rstrip("/")
+OPENAI_API_KEY = _raw("OPENAI_API_KEY") or ""
 LLM_TEMPERATURE = env_float("LLM_TEMPERATURE", 0.2)
 LLM_MAX_TOKENS = env_int_min("LLM_MAX_TOKENS", 1000, 1)
 LLM_REQUEST_TIMEOUT_S = env_int_min("LLM_REQUEST_TIMEOUT_S", 15, 1)
@@ -177,11 +182,28 @@ else:
     INGEST_MODERN_SNAPSHOT_FRACTION = 0.90
 
 # UI
-UI_CONFIDENCE_HIGH = env_unit_float("UI_CONFIDENCE_HIGH", 0.72)
-UI_CONFIDENCE_MEDIUM = env_unit_float("UI_CONFIDENCE_MEDIUM", 0.45)
+# Bands on sigmoid(cross-encoder logit). sigmoid(1) ≈ 0.73 is the raw cutoff
+# (RERANKER_MIN_RAW_SCORE): a kept hit that is only barely relevant. sigmoid(3) ≈ 0.95
+# is a strong ms-marco match. Anything kept but below that stays Medium.
+UI_CONFIDENCE_HIGH = env_unit_float("UI_CONFIDENCE_HIGH", 0.95)
+UI_CONFIDENCE_MEDIUM = env_unit_float("UI_CONFIDENCE_MEDIUM", 0.73)
 UI_FACET_LIMIT = env_int_min("UI_FACET_LIMIT", 5, 1)
 UI_MAX_AUTHORS_SHOWN = env_int_min("UI_MAX_AUTHORS_SHOWN", 3, 1)
+UI_PASSAGE_PREVIEW_CHARS = env_int_min("UI_PASSAGE_PREVIEW_CHARS", 280, 1)
+UI_MAX_FIGURE_LOOKUPS = env_int_min("UI_MAX_FIGURE_LOOKUPS", 3, 1)
+UI_MAX_HTML_CHARS = env_int_min("UI_MAX_HTML_CHARS", 2_000_000, 1)
+UI_FIGURE_SUCCESS_TTL_S = env_int_min("UI_FIGURE_SUCCESS_TTL_S", 24 * 60 * 60, 0)
+UI_FIGURE_FAILURE_TTL_S = env_int_min("UI_FIGURE_FAILURE_TTL_S", 10 * 60, 0)
+_figure_timeout_s = env_float("UI_FIGURE_TIMEOUT_S", 4.0)
+if _figure_timeout_s > 0:
+    UI_FIGURE_TIMEOUT_S = _figure_timeout_s
+else:
+    if _raw("UI_FIGURE_TIMEOUT_S") is not None:
+        _warn(f"UI_FIGURE_TIMEOUT_S={_figure_timeout_s} must be greater than 0. Using 4.0.")
+    UI_FIGURE_TIMEOUT_S = 4.0
 ARXIV_ABS_BASE_URL = env_str("ARXIV_ABS_BASE_URL", "https://arxiv.org/abs").rstrip("/")
+ARXIV_HTML_BASE_URL = env_str("ARXIV_HTML_BASE_URL", "https://arxiv.org/html").rstrip("/")
+ARXIV_HOME_URL = env_str("ARXIV_HOME_URL", "https://arxiv.org").rstrip("/") + "/"
 
 # Eval
 EVAL_SUPPORT_THRESHOLD = env_unit_float("EVAL_SUPPORT_THRESHOLD", 0.55)

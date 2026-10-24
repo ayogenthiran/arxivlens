@@ -12,3 +12,5 @@ __pycache__
 .DS_Store
 data
 *.log
+# The image must not contain a local API key. Compose injects .env at run time.
+.env

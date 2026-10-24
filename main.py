@@ -1,23 +1,16 @@
 # main.py
 
+import json
+import logging
 import os
 import sys
-import json
 import time
-from dotenv import load_dotenv
 
-# Add the project root to the Python path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-# Load environment variables
-load_dotenv()
-
+from src.api.server import APIServer
 from src.data_processing import DocumentProcessor
 from src.embeddings import EmbeddingModel
-from src.vector_store import VectorStore
 from src.llm import LLMInterface
 from src.reranker import CrossEncoderReranker
-from src.api.server import APIServer  # Correct import (from server.py)
 from src.settings import (
     DATA_DIR,
     HOST,
@@ -33,6 +26,7 @@ from src.settings import (
     RESET_INGEST,
     VECTOR_STORE_DIR,
 )
+from src.vector_store import VectorStore
 
 
 def _read_checkpoint(checkpoint_path: str) -> int:
@@ -85,20 +79,44 @@ def _with_retry(
             time.sleep(delay)
 
 
+def _flush_ingest_batch(
+    docs: list[dict],
+    document_processor: DocumentProcessor,
+    embedding_model: EmbeddingModel,
+    vector_store: VectorStore,
+    chunks_jsonl_path: str,
+    retry_max_attempts: int,
+    retry_base_delay_s: float,
+) -> tuple[int, int]:
+    chunks = document_processor.chunk_documents(docs)
+    embedded_chunks = _with_retry(
+        "embedding generation",
+        lambda chunks=chunks: embedding_model.embed_chunks(chunks),
+        max_attempts=retry_max_attempts,
+        base_delay_s=retry_base_delay_s,
+    )
+    if embedded_chunks is None:
+        raise RuntimeError("Embedding generation returned no chunks")
+    _with_retry(
+        "vector store write",
+        lambda embedded_chunks=embedded_chunks: vector_store.add_embeddings(embedded_chunks),
+        max_attempts=retry_max_attempts,
+        base_delay_s=retry_base_delay_s,
+    )
+    _append_chunks_jsonl(chunks_jsonl_path, embedded_chunks)
+    return len(docs), len(embedded_chunks)
+
+
 def main():
-    """
-    Main entry point for the ArxivLens application.
-    """
+    logging.basicConfig(level=logging.INFO)
     print("[INFO] Starting ArxivLens...")
 
-    # Initialize components
     document_processor = DocumentProcessor()
     embedding_model = EmbeddingModel()
     vector_store = VectorStore(persist_directory=VECTOR_STORE_DIR)
     llm_interface = LLMInterface()
     reranker = CrossEncoderReranker()
 
-    # Handle command-line arguments
     args = sys.argv[1:]
     
     if "--process-data" in args:
@@ -189,50 +207,33 @@ def main():
             if len(current_batch_docs) < batch_docs:
                 continue
 
-            chunks = document_processor.chunk_documents(current_batch_docs)
-            chunks_with_embeddings = _with_retry(
-                "embedding generation",
-                lambda: embedding_model.embed_chunks(chunks),
-                max_attempts=retry_max_attempts,
-                base_delay_s=retry_base_delay_s,
+            added_docs, added_chunks = _flush_ingest_batch(
+                current_batch_docs,
+                document_processor,
+                embedding_model,
+                vector_store,
+                chunks_jsonl_path,
+                retry_max_attempts,
+                retry_base_delay_s,
             )
-            if chunks_with_embeddings is None:
-                raise RuntimeError("Embedding generation returned no chunks")
-            embedded_chunks = chunks_with_embeddings
-            _with_retry(
-                "vector store write",
-                lambda: vector_store.add_embeddings(embedded_chunks),
-                max_attempts=retry_max_attempts,
-                base_delay_s=retry_base_delay_s,
-            )
-            _append_chunks_jsonl(chunks_jsonl_path, embedded_chunks)
-
-            processed_docs += len(current_batch_docs)
-            processed_chunks += len(embedded_chunks)
+            processed_docs += added_docs
+            processed_chunks += added_chunks
             _write_checkpoint(checkpoint_path, idx + 1)
             _log_progress("Batch done")
             current_batch_docs = []
 
         if current_batch_docs:
-            chunks = document_processor.chunk_documents(current_batch_docs)
-            chunks_with_embeddings = _with_retry(
-                "embedding generation",
-                lambda: embedding_model.embed_chunks(chunks),
-                max_attempts=retry_max_attempts,
-                base_delay_s=retry_base_delay_s,
+            added_docs, added_chunks = _flush_ingest_batch(
+                current_batch_docs,
+                document_processor,
+                embedding_model,
+                vector_store,
+                chunks_jsonl_path,
+                retry_max_attempts,
+                retry_base_delay_s,
             )
-            if chunks_with_embeddings is None:
-                raise RuntimeError("Embedding generation returned no chunks")
-            embedded_chunks = chunks_with_embeddings
-            _with_retry(
-                "vector store write",
-                lambda: vector_store.add_embeddings(embedded_chunks),
-                max_attempts=retry_max_attempts,
-                base_delay_s=retry_base_delay_s,
-            )
-            _append_chunks_jsonl(chunks_jsonl_path, embedded_chunks)
-            processed_docs += len(current_batch_docs)
-            processed_chunks += len(embedded_chunks)
+            processed_docs += added_docs
+            processed_chunks += added_chunks
             _write_checkpoint(checkpoint_path, idx + 1)
             _log_progress("Final batch done")
 
@@ -241,7 +242,6 @@ def main():
         print(f"[INFO] Chunk output saved at: {chunks_jsonl_path}")
         return
 
-    # Start API server
     print("[INFO] Starting API server...")
     api_server = APIServer(
         embedding_model=embedding_model,
