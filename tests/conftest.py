@@ -41,6 +41,10 @@ class _ChromaSettings:
         pass
 
 
+class _NotFoundError(Exception):
+    """Stand-in for chromadb.errors.NotFoundError when chromadb is not installed."""
+
+
 class _UnavailableSentenceTransformer:
     def __init__(self, *args, **kwargs):
         raise RuntimeError("sentence_transformers is not installed")
@@ -57,6 +61,9 @@ def _stub_heavy_imports() -> None:
         config = _new_stub("chromadb.config")
         config.Settings = _ChromaSettings
         chromadb.config = config
+        errors = _new_stub("chromadb.errors")
+        errors.NotFoundError = _NotFoundError
+        chromadb.errors = errors
         _STUBBED.add("chromadb")
 
     if not _module_available("sentence_transformers"):

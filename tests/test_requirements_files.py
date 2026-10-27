@@ -15,6 +15,20 @@ class RequirementsFileTests(unittest.TestCase):
     def test_app_version_matches_pyproject(self):
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(project["project"]["version"], APP_VERSION)
+
+    def test_ci_installs_lightweight_test_imports(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        for pin in (
+            "fastapi==0.115.9",
+            "uvicorn==0.34.2",
+            "pydantic==2.11.3",
+            "httpx==0.28.1",
+            "streamlit==1.44.1",
+        ):
+            self.assertIn(pin, workflow)
+        self.assertNotIn("sentence-transformers==", workflow)
+        self.assertNotIn("torch==", workflow)
+
     def test_requirements_files_are_utf8_without_nulls(self):
         paths = sorted(ROOT.glob("requirements*.txt"))
         self.assertTrue(paths)
