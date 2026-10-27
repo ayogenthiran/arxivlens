@@ -17,7 +17,10 @@ from urllib.parse import urljoin, urlparse
 import requests
 
 from src.settings import (
+    ARXIV_ABS_BASE_URL,
+    ARXIV_HOME_URL,
     ARXIV_HTML_BASE_URL,
+    ARXIV_USER_AGENT,
     UI_FIGURE_FAILURE_TTL_S,
     UI_FIGURE_SUCCESS_TTL_S,
     UI_FIGURE_TIMEOUT_S,
@@ -27,7 +30,7 @@ from src.settings import (
 )
 
 REQUEST_HEADERS = {
-    "User-Agent": "ArxivLens/1.0 (local research UI; acknowledges https://arxiv.org)",
+    "User-Agent": ARXIV_USER_AGENT,
 }
 
 ALLOWED_FIGURE_HOSTS = frozenset({"arxiv.org", "export.arxiv.org", "ar5iv.labs.arxiv.org"})
@@ -218,9 +221,20 @@ def extract_figure_url(page_html: str, page_url: str) -> str | None:
     return None
 
 
+def _allowed_figure_hosts() -> frozenset[str]:
+    """Known arXiv hosts, plus whatever host the configured arXiv base URLs use."""
+    hosts = {host.lower() for host in ALLOWED_FIGURE_HOSTS}
+    for base in (ARXIV_HTML_BASE_URL, ARXIV_ABS_BASE_URL, ARXIV_HOME_URL):
+        hostname = urlparse(base).hostname
+        if hostname:
+            hosts.add(hostname.lower())
+    return frozenset(hosts)
+
+
 def _https_arxiv_url(url: str) -> str | None:
     parsed = urlparse(url)
-    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_FIGURE_HOSTS:
+    hostname = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or hostname not in _allowed_figure_hosts():
         return None
     return url
 

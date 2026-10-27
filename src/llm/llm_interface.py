@@ -1,5 +1,3 @@
-# src/llm/llm_interface.py
-
 import json
 import logging
 import re
@@ -23,6 +21,8 @@ from src.settings import (
 logger = logging.getLogger(__name__)
 
 INSUFFICIENT_CONTEXT_ANSWER = "I do not have enough information in the provided context."
+EMPTY_ANSWER = "No answer returned."
+_DEFAULT_SYSTEM_MESSAGE = "You answer questions from the provided context."
 _BOLD = re.compile(r"\*\*|__")
 _DOC_REF = re.compile(
     r"\s*\(\s*Document\s+\d+(?:\s*,\s*Document\s+\d+)*\s*\)",
@@ -71,17 +71,7 @@ _ANSWER_RESPONSE_FORMAT = {
 }
 
 class LLMInterface:
-    """
-    Interface for interacting with Large Language Models (LLMs).
-    """
-
     def __init__(self, model_name: Optional[str] = None):
-        """
-        Initialize the LLM interface.
-
-        Args:
-            model_name: Name of the LLM model to use
-        """
         self.model_name = model_name or LLM_MODEL_NAME
         self.rewrite_model_name = QUERY_REWRITE_MODEL or self.model_name
         self.api_key = OPENAI_API_KEY
@@ -91,10 +81,7 @@ class LLMInterface:
             logger.warning("OPENAI_API_KEY not found in environment variables. API calls will fail.")
 
     def generate_response(self, query: str, context_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Generate a response using the LLM with retrieved context.
-        Returns a structured payload with validated citations.
-        """
+        """Return a structured answer whose citations were checked against the chunks."""
         formatted_context = self._format_context(context_chunks)
         prompt = self._create_prompt(query, formatted_context)
         raw_response = self._call_llm_api(
@@ -146,9 +133,6 @@ class LLMInterface:
             return query
 
     def _format_context(self, context_chunks: List[Dict[str, Any]]) -> str:
-        """
-        Format context chunks into a string for the prompt.
-        """
         if not context_chunks:
             return "No relevant context found."
 
@@ -163,34 +147,25 @@ class LLMInterface:
         return "\n".join(formatted_chunks)
 
     def _create_prompt(self, query: str, context: str) -> str:
-        """
-        Create a prompt for the LLM.
-        """
-        return f"""You are a helpful AI assistant that answers questions based on the provided context.
-
-CONTEXT:
+        return f"""CONTEXT:
 {context}
 
 USER QUERY:
 {query}
 
-Please answer the query based only on the provided context.
+Answer the query from the provided context only.
 If the context doesn't contain relevant information, set "summary" to "{INSUFFICIENT_CONTEXT_ANSWER}", "points" to [], and "citations" to [].
 Return a JSON object with:
 - "summary": one sentence that directly answers the query. Plain text. No markdown. Do not mention document numbers.
 - "points": a list of distinct findings. Each point has "title" (a few words, plain text, no markdown), "detail" (one or two sentences, plain text, no markdown, no document numbers), and "doc_ids" (integers matching [Document N] that support the point).
 - "citations": list of objects with "doc_id" (matching [Document N]) and "quote" (exact short supporting quote from that document)
 Only cite documents that appear in the provided context. Keep each point tied to the documents that support it.
-
-ANSWER:
 """
 
     def _parse_and_validate_response(self, raw_response: str, context_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Parse model JSON output and keep only citations validated against retrieved context.
-        """
+        """Keep citations whose quote actually appears in the cited chunk."""
         if not raw_response.strip():
-            return _payload("No answer returned.", "No answer returned.", [], [])
+            return _payload(EMPTY_ANSWER, EMPTY_ANSWER, [], [])
 
         try:
             parsed = json.loads(raw_response)
@@ -198,7 +173,7 @@ ANSWER:
             if not isinstance(citations, list):
                 citations = []
         except (json.JSONDecodeError, AttributeError, TypeError):
-            prose = _clean_sentence(raw_response) or "No answer returned."
+            prose = _clean_sentence(raw_response) or EMPTY_ANSWER
             return _payload(prose, prose, [], [])
 
         validated_citations = _validate_citations(citations, context_chunks)
@@ -222,9 +197,6 @@ ANSWER:
         model_name: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """
-        Call the LLM API with the prompt.
-        """
         if not self.api_key:
             raise RuntimeError("API key not configured. Please set the OPENAI_API_KEY environment variable.")
 
@@ -245,8 +217,7 @@ ANSWER:
             "messages": [
                 {
                     "role": "system",
-                    "content": system_message
-                    or "You are a helpful assistant that answers questions based on provided context.",
+                    "content": system_message or _DEFAULT_SYSTEM_MESSAGE,
                 },
                 {"role": "user", "content": prompt}
             ],
@@ -258,16 +229,14 @@ ANSWER:
 
         try:
             response = requests.post(url, headers=headers, json=data, timeout=LLM_REQUEST_TIMEOUT_S)
+        except requests.RequestException as exc:
+            logger.error("Error calling LLM API: %s", exc)
+            raise RuntimeError(f"Error calling LLM API: {exc}") from exc
 
-            if response.status_code == 200:
-                return response.json()["choices"][0]["message"]["content"]
-            else:
-                logger.error(f"API call failed with status code {response.status_code}: {response.text}")
-                raise RuntimeError(f"LLM API call failed: {response.text}")
-
-        except requests.RequestException as e:
-            logger.error(f"Error calling LLM API: {e}")
-            raise RuntimeError(f"Error calling LLM API: {e}")
+        if response.status_code != 200:
+            logger.error("API call failed with status code %s: %s", response.status_code, response.text)
+            raise RuntimeError(f"LLM API call failed: {response.text}")
+        return response.json()["choices"][0]["message"]["content"]
 
 
 def _payload(

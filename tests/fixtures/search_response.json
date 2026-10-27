@@ -1,0 +1,99 @@
+{
+  "query": "How do recent papers evaluate reasoning in large language models?",
+  "facets": {
+    "years": [
+      {"value": 2024, "count": 2},
+      {"value": 2023, "count": 1}
+    ],
+    "categories": [
+      {"value": "cs.CL", "count": 2},
+      {"value": "cs.LG", "count": 1}
+    ],
+    "authors": [
+      {"value": "Ada Lovelace", "count": 1},
+      {"value": "Grace Hopper", "count": 1}
+    ]
+  },
+  "context_chunks": [
+    {
+      "id": "2401.12345-0",
+      "text": "Evaluating Multi-Step Reasoning, Evidence Selection, Citation Grounding, and Hallucination Controls in Retrieval-Augmented Large Language Models for Scientific Literature Review Across Benchmarks, Research Domains, Reporting Standards, and Human Evaluation Protocols\n\nRecent papers evaluate reasoning in large language models with step-level scores. Reasoning benchmarks score intermediate steps rather than the final answer alone. This study compares evidence selection methods used when language models answer research questions. The evaluation covers citation checks, abstention, and human review of model traces. Additional analysis looks at how retrieval depth changes the measured reasoning quality across scientific domains and reporting styles. Reviewers also score whether each cited sentence is supported by the retrieved passage.",
+      "reranker_score": 0.97,
+      "metadata": {
+        "doc_id": "2401.12345",
+        "chunk_id": "2401.12345-0",
+        "title": "Evaluating Multi-Step Reasoning, Evidence Selection, Citation Grounding, and Hallucination Controls in Retrieval-Augmented Large Language Models for Scientific Literature Review Across Benchmarks, Research Domains, Reporting Standards, and Human Evaluation Protocols",
+        "authors": ["Ada Lovelace", "Alan Turing", "Grace Hopper", "Donald Knuth"],
+        "year": 2024,
+        "categories": ["cs.CL", "cs.LG"],
+        "submission_date": "2024-06-12"
+      }
+    },
+    {
+      "id": "2403.06789-0",
+      "text": "Retrieval Systems That Select Evidence Before Answering\n\nRetrieval systems select evidence before a language model writes. The paper measures whether the selected passage actually supports the claim. Recent evaluations of reasoning treat unsupported sentences as errors even when the final label is correct. A second experiment varies how many passages are shown to the model and records the change in citation precision.",
+      "reranker_score": 0.8,
+      "metadata": {
+        "doc_id": "2403.06789",
+        "chunk_id": "2403.06789-0",
+        "title": "Retrieval Systems That Select Evidence Before Answering",
+        "authors": ["Grace Hopper", "Edsger Dijkstra"],
+        "year": 2024,
+        "categories": ["cs.LG"],
+        "submission_date": "2024-03-02"
+      }
+    },
+    {
+      "id": "2312.11111-0",
+      "text": "Hallucination Checks for Cited Answers\n\nHallucination checks compare a cited sentence with the source passage. Large language models can sound confident when the passage does not contain the claim. The method flags those sentences for review and keeps the ones a reader can verify.",
+      "reranker_score": 0.4,
+      "metadata": {
+        "doc_id": "2312.11111",
+        "chunk_id": "2312.11111-0",
+        "title": "Hallucination Checks for Cited Answers",
+        "authors": ["Barbara Liskov"],
+        "year": 2023,
+        "categories": ["cs.CL"],
+        "submission_date": "2023-12-18"
+      }
+    }
+  ],
+  "answer": {
+    "answer": "Recent papers evaluate reasoning by scoring intermediate steps and checking that each citation is supported by the retrieved passage.",
+    "summary": "Recent papers evaluate reasoning in large language models by scoring intermediate steps and checking that cited sentences match the retrieved evidence.",
+    "points": [
+      {
+        "title": "Score the steps, not only the final label",
+        "detail": "Reasoning benchmarks give credit for intermediate steps and mark an answer wrong when the supporting passage is missing.",
+        "sources": [
+          {
+            "arxiv_id": "2401.12345",
+            "title": "Evaluating Multi-Step Reasoning, Evidence Selection, Citation Grounding, and Hallucination Controls in Retrieval-Augmented Large Language Models for Scientific Literature Review Across Benchmarks, Research Domains, Reporting Standards, and Human Evaluation Protocols"
+          }
+        ]
+      },
+      {
+        "title": "Select evidence before writing",
+        "detail": "Retrieval systems choose the passage first, then measure whether that passage supports the claim.",
+        "sources": [
+          {
+            "arxiv_id": "2403.06789",
+            "title": "Retrieval Systems That Select Evidence Before Answering"
+          }
+        ]
+      }
+    ],
+    "citations": [
+      {
+        "arxiv_id": "2401.12345",
+        "title": "Evaluating Multi-Step Reasoning, Evidence Selection, Citation Grounding, and Hallucination Controls in Retrieval-Augmented Large Language Models for Scientific Literature Review Across Benchmarks, Research Domains, Reporting Standards, and Human Evaluation Protocols",
+        "quote": "Reasoning benchmarks score intermediate steps rather than the final answer alone."
+      },
+      {
+        "arxiv_id": "2403.06789",
+        "title": "Retrieval Systems That Select Evidence Before Answering",
+        "quote": "Retrieval systems select evidence before a language model writes."
+      }
+    ]
+  }
+}

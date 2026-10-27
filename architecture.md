@@ -12,15 +12,19 @@ flowchart LR
   chroma --> jsonl["processed_chunks.jsonl"]
   chroma --> checkpoint["ingest_checkpoint.json"]
 
-  ui["Streamlit :8501"] --> api["FastAPI :8000<br/>POST /api/query"]
-  api --> qembed["Query embedding<br/>same MiniLM"]
+  ui["Streamlit :8501"] --> search["POST /api/search"]
+  search --> qembed["Query embedding<br/>same MiniLM"]
   qembed --> vector["Vector search"]
   chroma --> vector
   vector --> hybrid["BM25 + RRF<br/>at most 50,000 docs"]
   hybrid --> rerank["Cross-encoder<br/>sigmoid score"]
-  rerank --> llm["gpt-4o-mini<br/>answer and citations"]
+  rerank --> papers["Papers in the UI"]
+  papers --> answer["POST /api/answer"]
+  answer --> llm["gpt-4o-mini<br/>answer and citations"]
 
-  api -.-> rewrite["Query rewrite<br/>off"]
+  query["POST /api/query"] --> qembed
+  query --> llm
+  query -.-> rewrite["Query rewrite<br/>off"]
 ```
 
 The solid path runs on the live corpus. The dashed rewrite step is in the code and returns the original query while `ENABLE_QUERY_REWRITE=false`. BM25 is skipped when the collection is larger than `HYBRID_BM25_MAX_DOCS` (50,000), which is the case for the full archive.
@@ -38,17 +42,17 @@ The solid path runs on the live corpus. The dashed rewrite step is in the code a
 
 ## Query
 
-`streamlit_app.py` posts `query`, `top_k`, and optional author, category, and year filters to `POST /api/query`.
+`streamlit_app.py` posts `query`, `top_k`, and optional author, category, and year filters to `POST /api/search`, draws the papers, then posts that query and those chunks to `POST /api/answer`. `POST /api/query` still runs the whole pipeline in one response.
 
-1. `LLMInterface.rewrite_query` returns the original query. `ENABLE_QUERY_REWRITE` defaults to false.
+1. `POST /api/query` calls `LLMInterface.rewrite_query`, which returns the original query. `ENABLE_QUERY_REWRITE` defaults to false. `POST /api/search` does not rewrite and does not call the model. It embeds the query text it received.
 2. The query is embedded with the same MiniLM model and L2-normalized.
 3. `VectorStore.query` runs a Chroma vector search. Year bounds filter on metadata `year` in the Chroma `where` clause and again in Python. Author and category filters are applied in Python after the search. The search asks for more neighbors than `top_k` so one chunk per paper can still fill the list.
 4. On a collection of at most 50,000 documents, vector rank and BM25 rank are fused with reciprocal rank fusion (`RRF_K`, default 60). `hybrid_score` is that fusion score. Above 50,000 documents the BM25 index is not built, `bm25_score` stays 0, and ranking is vector-only. The live corpus is under that cap, so hybrid search runs.
 5. `CrossEncoderReranker` reranks up to `RERANKER_MAX_CANDIDATES` (24) chunks with `cross-encoder/ms-marco-MiniLM-L-6-v2`. It stores `reranker_score_raw` (the logit) and `reranker_score` as the sigmoid of that logit, so the 0–1 score means the same thing on every query. Chunks whose raw score is below `RERANKER_MIN_RAW_SCORE` (1) are removed. A raw score near 0 goes away. A raw score around 5 stays. The kept list is cut to `top_k`.
 6. Facet counts for year, category, and author are computed from the kept chunks only.
-7. If no chunks remain, the API skips the model and returns "I do not have enough information in the provided context." with no citations. Otherwise `gpt-4o-mini` sees chunks as `[Document N]` and returns a one-sentence summary plus a list of points. Each point has a short title, one or two sentences, and the document numbers that support it. The API keeps only numbers that match a retrieved chunk and attaches that paper's title and arXiv id. The app shows the summary, then one row per point, with each paper title linking to `https://arxiv.org/abs/{id}`. `answer` is the same text as a plain string. The API also checks that each citation quote appears in that chunk, then adds the arXiv id (`metadata.doc_id`), chunk id, and title.
+7. If no chunks remain, the API skips the model and returns "I do not have enough information in the provided context." with no citations. Otherwise `gpt-4o-mini` sees chunks as `[Document N]` and returns a one-sentence summary plus a list of points. Each point has a short title, one or two sentences, and the document numbers that support it. The API keeps only numbers that match a retrieved chunk and attaches that paper's title and arXiv id. The app shows that summary in an expander titled "AI summary of these papers", then one row per point, with each paper title linking to `https://arxiv.org/abs/{id}`. The paper list is already on the page. If the summary call fails, the papers stay and the expander shows a short error. `answer` is the same text as a plain string. The API also checks that each citation quote appears in that chunk, then adds the arXiv id (`metadata.doc_id`), chunk id, and title. `POST /api/answer` checks quotes against the chunks in the request body. Those chunks are the search response, or the chunks loaded for the requested chunk ids.
 
-The response body is `answer`, `summary`, `points`, `citations`, `context_chunks`, `facets`, `query`, and `rewritten_query`.
+`POST /api/query` still returns `answer`, `summary`, `points`, `citations`, `context_chunks`, `facets`, `query`, and `rewritten_query`. `POST /api/search` returns `context_chunks`, `facets`, and `query`. `POST /api/answer` returns `answer`, `summary`, `points`, and `citations`.
 
 Other routes: `GET /`, `GET /api/health`, `GET /api/readiness`.
 

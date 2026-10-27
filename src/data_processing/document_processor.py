@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from datetime import date, datetime
@@ -11,8 +12,17 @@ from src.settings import (
     INGEST_YEAR_SEEK_WINDOW_BYTES,
 )
 
+logger = logging.getLogger(__name__)
+
 _CATEGORY_CODE = re.compile(r"[A-Za-z][A-Za-z0-9\-]*(?:\.[A-Za-z0-9\-]+)?")
 _MODERN_ARXIV_ID = re.compile(r"^(\d{2})(\d{2})\.")
+
+
+def _split_author_string(authors: str) -> List[str]:
+    """Split an arXiv author string. ``and`` separates names; a comma can sit inside one name."""
+    separator = " and " if " and " in authors else ","
+    return [name.strip() for name in authors.split(separator) if name.strip()]
+
 
 class DocumentProcessor:
     """Load arXiv metadata and build one chunk per paper."""
@@ -40,8 +50,8 @@ class DocumentProcessor:
                     except json.JSONDecodeError:
                         f.seek(0)
                         yield from self._iter_jsonl_handle(f, file_path)
-            except Exception as e:
-                print(f"Error streaming document {file_path}: {e}")
+            except Exception as exc:
+                logger.error("Error streaming document %s: %s", file_path, exc)
 
     def _iter_jsonl(self, file_path: Path, min_year: int) -> Iterator[Dict[str, Any]]:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -137,13 +147,9 @@ class DocumentProcessor:
         
         for doc in documents:
             text = self._paper_text(doc)
-
-            # Skip empty documents
             if not text.strip():
                 continue
 
-            # A paper is one searchable record: title, then the full abstract.
-            # Overlapping slices let one paper fill the result list.
             paper_id = str(doc.get("id") or "")
             metadata = {
                 "doc_id": paper_id,
@@ -159,9 +165,12 @@ class DocumentProcessor:
             submission_year = doc.get("submission_year")
             if isinstance(submission_year, int):
                 metadata["submission_year"] = submission_year
+            submission_date = doc.get("submission_date")
+            if isinstance(submission_date, str) and submission_date.strip():
+                metadata["submission_date"] = submission_date.strip()
             chunks.append({"text": text, "metadata": metadata})
         
-        print(f"Created {len(chunks)} chunks from {len(documents)} documents")
+        logger.info("Created %s chunks from %s documents", len(chunks), len(documents))
         return chunks
 
     def _paper_text(self, doc: Dict[str, Any]) -> str:
@@ -192,7 +201,7 @@ class DocumentProcessor:
         if isinstance(authors, list):
             return [str(author).strip() for author in authors if str(author).strip()]
         if isinstance(authors, str):
-            return [name.strip() for name in re.split(r"\s+and\s+|,\s*", authors) if name.strip()]
+            return _split_author_string(authors)
         return []
 
     def _normalize_categories(self, categories: Any) -> List[str]:

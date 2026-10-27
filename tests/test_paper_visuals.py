@@ -34,6 +34,12 @@ class FigureExtractionTests(unittest.TestCase):
             "https://arxiv.org/html/2407.01449v6/images/final_architecture.png",
         )
 
+    def test_accepts_figure_on_configured_html_host(self):
+        page = '<figure><img src="https://mirror.example/fig.png" class="ltx_graphics"></figure>'
+        with patch("src.ui.paper_visuals.ARXIV_HTML_BASE_URL", "https://mirror.example/html"):
+            found = extract_figure_url(page, "https://mirror.example/html/2407.01449")
+        self.assertEqual(found, "https://mirror.example/fig.png")
+
     def test_rejects_offsite_figure(self):
         page = '<figure><img src="https://evil.example/fig.png" class="ltx_graphics"></figure>'
         self.assertIsNone(extract_figure_url(page, PAGE_URL))

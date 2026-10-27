@@ -1,5 +1,8 @@
+import tomllib
 import unittest
 from pathlib import Path
+
+from src.settings import APP_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN_COMMENT = (
@@ -9,6 +12,9 @@ PIN_COMMENT = (
 
 
 class RequirementsFileTests(unittest.TestCase):
+    def test_app_version_matches_pyproject(self):
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(project["project"]["version"], APP_VERSION)
     def test_requirements_files_are_utf8_without_nulls(self):
         paths = sorted(ROOT.glob("requirements*.txt"))
         self.assertTrue(paths)

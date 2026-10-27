@@ -26,6 +26,7 @@ class ExtractYearTests(unittest.TestCase):
         chunks = self.processor.chunk_documents([doc])
         self.assertEqual(chunks[0]["metadata"]["year"], 2016)
         self.assertEqual(chunks[0]["metadata"]["updated_year"], 2024)
+        self.assertEqual(chunks[0]["metadata"]["submission_date"], "2016-01-04")
 
     def test_unparseable_versions_fall_back_to_modern_id(self):
         data = {
@@ -89,6 +90,26 @@ class ExtractYearTests(unittest.TestCase):
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0]["metadata"]["chunk_id"], "2401.00001-0")
         self.assertEqual(chunks[0]["text"], f"A long abstract\n\n{abstract.strip()}")
+
+    def test_author_string_keeps_a_comma_inside_each_name(self):
+        data = {
+            "id": "2401.00001",
+            "title": "Attention",
+            "abstract": "Abstract",
+            "authors": "Vaswani, Ashish and Shazeer, Noam",
+        }
+        doc = self.processor._build_document(data, Path("snapshot.json"))
+        self.assertEqual(doc["authors"], ["Vaswani, Ashish", "Shazeer, Noam"])
+
+    def test_author_string_without_and_splits_on_commas(self):
+        data = {
+            "id": "2401.00001",
+            "title": "Attention",
+            "abstract": "Abstract",
+            "authors": "Ashish Vaswani, Noam Shazeer",
+        }
+        doc = self.processor._build_document(data, Path("snapshot.json"))
+        self.assertEqual(doc["authors"], ["Ashish Vaswani", "Noam Shazeer"])
 
 
 if __name__ == "__main__":

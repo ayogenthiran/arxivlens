@@ -1,5 +1,3 @@
-# src/vector_store/vector_store.py
-
 import logging
 import os
 import re
@@ -9,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import chromadb
 import numpy as np
 from chromadb.config import Settings
+from chromadb.errors import NotFoundError
 from rank_bm25 import BM25Okapi
 
 from src.settings import (
@@ -26,18 +25,7 @@ from src.settings import (
 logger = logging.getLogger(__name__)
 
 class VectorStore:
-    """
-    Manages vector storage and retrieval using ChromaDB.
-    """
-
     def __init__(self, persist_directory: Optional[str] = None, collection_name: Optional[str] = None):
-        """
-        Initialize the vector store.
-
-        Args:
-            persist_directory: Directory to persist the database
-            collection_name: Name of the collection to use
-        """
         self.persist_directory = persist_directory
         self.collection_name = collection_name or CHROMA_COLLECTION_NAME
         self.client = None
@@ -48,44 +36,37 @@ class VectorStore:
         self._bm25_metadata_by_id: Dict[str, Dict[str, Any]] = {}
 
     def initialize(self):
-        """
-        Initialize the ChromaDB client and collection.
-        """
-        if self.client is None:
-            try:
-                if self.persist_directory:
-                    os.makedirs(self.persist_directory, exist_ok=True)
-                    self.client = chromadb.PersistentClient(
-                        path=self.persist_directory,
-                        settings=Settings(anonymized_telemetry=ANONYMIZED_TELEMETRY),
-                    )
-                    logger.info(f"Initialized PersistentClient at {self.persist_directory}")
-                else:
-                    self.client = chromadb.Client(settings=Settings(anonymized_telemetry=ANONYMIZED_TELEMETRY))
-                    logger.info("Initialized In-Memory ChromaDB Client")
-                
-                self.collection = self._get_or_create_collection()
-            except Exception as e:
-                logger.error(f"Error initializing VectorStore: {e}")
-                raise
+        if self.client is not None:
+            return
+        if self.persist_directory:
+            os.makedirs(self.persist_directory, exist_ok=True)
+            self.client = chromadb.PersistentClient(
+                path=self.persist_directory,
+                settings=Settings(anonymized_telemetry=ANONYMIZED_TELEMETRY),
+            )
+            logger.info("Initialized PersistentClient at %s", self.persist_directory)
+        else:
+            self.client = chromadb.Client(settings=Settings(anonymized_telemetry=ANONYMIZED_TELEMETRY))
+            logger.info("Initialized in-memory Chroma client")
+        self.collection = self._get_or_create_collection()
 
     def _get_or_create_collection(self):
-        """
-        Open the collection, or create it with cosine distance.
+        """Open the collection. Create a missing one with cosine distance.
 
-        An existing collection is left in place. If its distance is not cosine,
-        a warning tells the user to re-ingest.
+        An existing collection is left in place. A distance other than cosine
+        logs a warning and still serves that collection.
         """
         try:
             collection = self.client.get_collection(name=self.collection_name)
-            logger.info(f"Using existing collection: {self.collection_name}")
-            self._warn_if_not_cosine(collection)
-        except Exception:
+        except NotFoundError:
             collection = self.client.create_collection(
                 name=self.collection_name,
                 metadata={"hnsw:space": "cosine"},
             )
-            logger.info(f"Created new collection: {self.collection_name}")
+            logger.info("Created new collection: %s", self.collection_name)
+            return collection
+        logger.info("Using existing collection: %s", self.collection_name)
+        self._warn_if_not_cosine(collection)
         return collection
 
     def _warn_if_not_cosine(self, collection) -> None:
@@ -122,12 +103,6 @@ class VectorStore:
         return 1.0 / (1.0 + distance_value)
 
     def add_embeddings(self, chunks: List[Dict[str, Any]]) -> None:
-        """
-        Add document chunks with embeddings to the vector store.
-
-        Args:
-            chunks: List of chunk dictionaries with text, metadata, and embeddings
-        """
         if not chunks:
             logger.warning("No chunks to add to vector store")
             return
@@ -140,22 +115,17 @@ class VectorStore:
         documents = [chunk["text"] for chunk in chunks]
         metadatas = [self._metadata_for_chroma(chunk["metadata"]) for chunk in chunks]
 
-        try:
-            self.collection.add(
-                ids=ids,
-                embeddings=embeddings,
-                documents=documents,
-                metadatas=metadatas
-            )
-            # Keep BM25 index in sync with newly added chunks.
-            self._bm25 = None
-            self._bm25_doc_ids = []
-            self._bm25_docs = []
-            self._bm25_metadata_by_id = {}
-            logger.info(f"Added {len(chunks)} chunks to vector store")
-        except Exception as e:
-            logger.error(f"Error adding embeddings to vector store: {e}")
-            raise
+        self.collection.add(
+            ids=ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas,
+        )
+        self._bm25 = None
+        self._bm25_doc_ids = []
+        self._bm25_docs = []
+        self._bm25_metadata_by_id = {}
+        logger.info("Added %s chunks to vector store", len(chunks))
 
     def _tokenize(self, text: str) -> List[str]:
         return re.findall(r"\w+", text.lower())
@@ -249,17 +219,7 @@ class VectorStore:
         n_results: int = DEFAULT_TOP_K,
         filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Query the vector store for similar documents using hybrid retrieval.
-
-        Args:
-            query_embedding: Query embedding vector
-            query_text: Original user query for BM25 lexical retrieval
-            n_results: Number of results to return
-
-        Returns:
-            List of similar document chunks
-        """
+        """Vector neighbors, fused with BM25 ranks when that index is built."""
         if self.collection is None:
             self.initialize()
 
@@ -269,26 +229,21 @@ class VectorStore:
         # the Chroma where clause.
         candidate_limit = self._candidate_limit(n_results, filters)
 
-        try:
-            where_clause = self._build_where_clause(filters)
-            vector_results = self._vector_search(
-                query_embedding=query_embedding,
-                n_results=candidate_limit,
-                where=where_clause,
-            )
-            vector_results = [
-                item for item in vector_results if self._metadata_matches_filters(item.get("metadata", {}), filters)
-            ]
-            vector_results = sorted(
-                vector_results,
-                key=lambda item: float(item.get("vector_score") or 0.0),
-                reverse=True,
-            )
-        except Exception as e:
-            logger.error(f"Error querying vector store: {e}")
-            raise
+        where_clause = self._build_where_clause(filters)
+        vector_results = self._vector_search(
+            query_embedding=query_embedding,
+            n_results=candidate_limit,
+            where=where_clause,
+        )
+        vector_results = [
+            item for item in vector_results if self._metadata_matches_filters(item.get("metadata", {}), filters)
+        ]
+        vector_results = sorted(
+            vector_results,
+            key=lambda item: float(item.get("vector_score") or 0.0),
+            reverse=True,
+        )
 
-        # If no query text is available, return vector-only retrieval.
         if not query_text:
             formatted_results = self._take_best_chunk_per_paper(vector_results, n_results, "vector_score")
             logger.info(f"Vector-only query returned {len(formatted_results)} results")
@@ -426,6 +381,36 @@ class VectorStore:
             "categories": [{"value": cat, "count": count} for cat, count in categories.most_common()],
             "authors": [{"value": author, "count": count} for author, count in authors.most_common(top_n_authors)],
         }
+
+    def get_chunks_by_ids(self, chunk_ids: List[str]) -> List[Dict[str, Any]]:
+        """Return stored chunks in the requested id order. Missing ids are skipped."""
+        if self.collection is None:
+            self.initialize()
+
+        ordered_ids: List[str] = []
+        seen: set[str] = set()
+        for chunk_id in chunk_ids:
+            text = str(chunk_id).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            ordered_ids.append(text)
+        if not ordered_ids:
+            return []
+
+        results = self.collection.get(ids=ordered_ids, include=["documents", "metadatas"])
+        documents = results.get("documents") or []
+        metadatas = results.get("metadatas") or []
+        found: Dict[str, Dict[str, Any]] = {}
+        for index, chunk_id in enumerate(results.get("ids") or []):
+            metadata = metadatas[index] if index < len(metadatas) and metadatas[index] else {}
+            document = documents[index] if index < len(documents) and documents[index] else ""
+            found[chunk_id] = {
+                "id": chunk_id,
+                "text": document,
+                "metadata": self._normalize_chunk_metadata(metadata),
+            }
+        return [found[chunk_id] for chunk_id in ordered_ids if chunk_id in found]
 
     def _build_where_clause(self, filters: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not filters:

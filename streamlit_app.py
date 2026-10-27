@@ -7,52 +7,71 @@ import streamlit as st
 
 from src.settings import (
     API_BASE_URL,
-    API_QUERY_TIMEOUT_S,
     ARXIV_ABS_BASE_URL,
     ARXIV_HOME_URL,
+    COMMON_ARXIV_CATEGORIES,
     DEFAULT_TOP_K,
     UI_CONFIDENCE_HIGH,
     UI_CONFIDENCE_MEDIUM,
-    UI_FACET_LIMIT,
-    UI_MAX_AUTHORS_SHOWN,
     UI_MAX_TOP_K,
     UI_MIN_TOP_K,
     YEAR_MAX_BOUND,
     YEAR_MIN_BOUND,
 )
 from src.ui.answer_display import render_answer_html
+from src.ui.examples import (
+    EXAMPLE_PROMPT,
+    EXAMPLE_QUESTIONS,
+    example_chip_label,
+    example_retrieval_filters,
+)
 from src.ui.paper_visuals import (
     arxiv_logo_path,
-    category_color,
     clean_arxiv_id,
     load_figure_urls,
-    paper_media_html,
-    passage_body,
-    passage_preview,
-    primary_category,
     uncached_figure_ids,
 )
-
-QUERY_URL = f"{API_BASE_URL}/api/query"
-QUERY_INPUT_KEY = "query_input"
-RESULT_KEY = "query_result"
-ERROR_KEY = "query_error"
-EXAMPLE_QUESTIONS = (
-    "How do recent papers evaluate reasoning in large language models?",
-    "What techniques reduce hallucination in language models?",
-    "How do retrieval systems select evidence for an answer?",
+from src.ui.result_cards import (
+    SORT_NEWEST,
+    SORT_RELEVANCE,
+    arxiv_pdf_url,
+    build_bibtex,
+    citation_quotes,
+    order_papers,
+    paper_card_html,
 )
-BAND_COLORS = {
-    "High": "#34d399",
-    "Medium": "#fbbf24",
-    "Low": "#f87171",
-}
+from src.ui.search_flow import request_answer, search_papers, search_then_answer
+from src.ui.search_params import decode_search_params, encode_search_params, present_search_params
+from src.ui.sidebar_filters import (
+    AUTHOR_INPUT_HINT,
+    active_filter_count,
+    author_filter_name,
+    clear_all_filters,
+    clear_author_filter,
+    filters_heading,
+    results_empty_message,
+)
 
+QUERY_INPUT_KEY = "query_input"
+TOP_K_KEY = "top_k_input"
+CATEGORIES_KEY = "categories_input"
+AUTHORS_KEY = "authors_input"
+YEAR_RANGE_KEY = "year_range_input"
+SORT_KEY = "sort_by_input"
+CATEGORY_CUSTOM_KEY = "category_custom_input"
+PENDING_CATEGORIES_KEY = "pending_categories"
+CLEAR_CATEGORY_CUSTOM_KEY = "clear_category_custom"
+SEARCH_HYDRATED_KEY = "search_params_hydrated"
+SEARCH_RESULT_KEY = "search_result"
+APPLIED_FILTERS_KEY = "applied_search_filters"
+ANSWER_KEY = "answer_result"
+ANSWER_ERROR_KEY = "answer_error"
+ERROR_KEY = "query_error"
+SUMMARY_TITLE = "AI summary of these papers"
 GLOBAL_STYLES = """
 <style>
-.stApp {
-    background: #0f172a;
-    color: #e2e8f0;
+header[data-testid="stHeader"] {
+    background: transparent !important;
 }
 .block-container {
     max-width: 960px;
@@ -93,37 +112,106 @@ GLOBAL_STYLES = """
     flex: 0 0 auto;
     line-height: 0;
     padding: 0.4rem;
+    min-width: 40px;
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
 }
 .arxiv-mark img {
     height: 42px;
     width: auto;
     display: block;
 }
-.examples h2 {
-    margin: 0.4rem 0 0.25rem 0;
-    color: #f8fafc;
-    font-size: 1.15rem;
-}
-.examples p {
-    margin: 0 0 0.7rem 0;
+.example-prompt {
+    margin: 0.2rem 0 0.45rem 0;
     color: #94a3b8;
     font-size: 0.9rem;
+    line-height: 1.4;
+}
+[data-testid="stVerticalBlock"].st-key-example_chips {
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    align-items: flex-start !important;
+    gap: 0.45rem 0.5rem !important;
+}
+[data-testid="stVerticalBlock"].st-key-example_chips > [data-testid="stElementContainer"] {
+    width: fit-content !important;
+    max-width: calc(50% - 0.35rem) !important;
+    flex: 0 1 auto !important;
+}
+[data-testid="stVerticalBlock"].st-key-example_chips button[kind="secondary"] {
+    width: auto !important;
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: 40px !important;
+    border-radius: 999px !important;
+    padding: 0.35rem 0.75rem !important;
+    margin-bottom: 0 !important;
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    line-height: 1.3 !important;
+    white-space: normal !important;
+    text-align: left !important;
+}
+[data-testid="stVerticalBlock"].st-key-example_chips button[kind="secondary"] p {
+    width: auto !important;
+    font-size: 0.82rem !important;
+    white-space: normal !important;
+    text-align: left !important;
+}
+[data-testid="stVerticalBlock"].st-key-example_chips button em {
+    font-style: normal;
+    font-size: 0.85em;
+    font-weight: 400;
+    color: #94a3b8;
 }
 .query-label {
     font-weight: 600;
     margin-bottom: 0.4rem;
 }
-.query-hint {
-    margin-top: 0.35rem;
-    color: #94a3b8;
-    font-size: 0.88rem;
-}
-.stTextInput input, .stTextArea textarea {
-    background: #1e293b !important;
-    color: #f8fafc !important;
+.stTextInput input, .stTextArea textarea,
+div[data-testid="stNumberInput"] input {
     border: 1px solid #334155 !important;
     border-radius: 10px !important;
     padding: 0.75rem !important;
+    min-height: 40px !important;
+    box-sizing: border-box !important;
+}
+div[data-baseweb="select"] > div {
+    min-height: 40px !important;
+}
+button[data-testid="stBaseButton-headerNoPadding"],
+button[data-testid="stNumberInputStepDown"],
+button[data-testid="stNumberInputStepUp"],
+[data-testid="stTooltipIcon"] {
+    min-width: 40px !important;
+    min-height: 40px !important;
+}
+div[data-testid="stRadio"] label {
+    min-height: 40px !important;
+    min-width: 40px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+}
+label[data-testid="stWidgetLabel"] {
+    min-height: 40px !important;
+    align-items: center;
+}
+div[data-testid="stSlider"] [role="slider"] {
+    width: 16px !important;
+    height: 16px !important;
+}
+div[data-testid="stSliderThumbValue"] {
+    color: #f8fafc !important;
+    background: #0f172a !important;
+    border-radius: 4px;
+}
+.stTextInput input::placeholder,
+.stTextArea textarea::placeholder {
+    color: #cbd5e1 !important;
+    opacity: 1 !important;
 }
 button[kind="secondaryFormSubmit"],
 button[kind="primary"] {
@@ -133,6 +221,7 @@ button[kind="primary"] {
     border-radius: 8px !important;
     font-weight: 600 !important;
     padding: 0.55rem 1.2rem !important;
+    min-height: 40px !important;
 }
 button[kind="secondaryFormSubmit"]:hover,
 button[kind="primary"]:hover {
@@ -147,6 +236,7 @@ button[kind="secondary"] {
     font-weight: 500 !important;
     padding: 0.8rem 0.95rem !important;
     margin-bottom: 0.15rem !important;
+    min-height: 40px !important;
 }
 button[kind="secondary"] p {
     text-align: left !important;
@@ -156,6 +246,26 @@ button[kind="secondary"]:hover {
     background: #1e293b !important;
     border-color: #60a5fa !important;
     color: #f8fafc !important;
+}
+div[data-testid="stLinkButton"] a,
+div[data-testid="stPopover"] button {
+    background: #111827 !important;
+    color: #e2e8f0 !important;
+    border: 1px solid #334155 !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.85rem !important;
+    padding: 0.4rem 0.75rem !important;
+    margin-bottom: 0 !important;
+    min-height: 40px !important;
+    box-sizing: border-box !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-decoration: none !important;
+}
+div[data-testid="stLinkButton"] a {
+    color: #93c5fd !important;
 }
 h1 [data-testid="stHeaderActionElements"] {
     display: none;
@@ -180,7 +290,7 @@ h1 [data-testid="stHeaderActionElements"] {
     color: #e2e8f0;
     font-size: 1.05rem;
 }
-.answer-box, .source-card, .paper-card {
+.answer-box, .paper-card {
     background: #111827;
     border: 1px solid #334155;
     border-radius: 12px;
@@ -235,18 +345,21 @@ ol.answer-points li {
 }
 a.source-chip, span.source-chip {
     display: inline-block;
-    max-width: 280px;
+    box-sizing: border-box;
+    max-width: min(280px, 100%);
+    min-height: 40px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     vertical-align: middle;
     margin: 0 0.35rem 0.35rem 0;
-    padding: 0.16rem 0.55rem;
+    padding: 0.55rem 0.75rem;
     border-radius: 999px;
     border: 1px solid #334155;
     background: #1e293b;
     color: #93c5fd;
     font-size: 0.8rem;
+    line-height: 1.3;
     text-decoration: none;
 }
 a.source-chip:hover {
@@ -260,6 +373,7 @@ a.source-chip:hover {
     position: relative;
     overflow: hidden;
     border-left: 3px solid var(--band, #334155);
+    scroll-margin-top: 5rem;
 }
 .paper-body {
     min-width: 0;
@@ -267,6 +381,66 @@ a.source-chip:hover {
 }
 .paper-body h3 {
     margin-top: 0;
+    padding: 0 !important;
+    font-size: 18px;
+    line-height: 1.35 !important;
+    display: -webkit-box !important;
+    -webkit-line-clamp: 3 !important;
+    -webkit-box-orient: vertical !important;
+    overflow: hidden !important;
+    max-height: calc(1.35em * 3) !important;
+    overflow-wrap: anywhere;
+}
+.paper-byline {
+    margin-top: 0.2rem;
+    color: #94a3b8;
+    font-size: 0.9rem;
+    line-height: 1.45;
+}
+.category-chip {
+    display: inline-block;
+    padding: 0.02rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid #334155;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    vertical-align: baseline;
+}
+.band-label {
+    display: inline-block;
+    margin-left: 0.55rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: var(--band, #94a3b8);
+}
+.best-sentence {
+    margin: 0.5rem 0 0 0;
+    color: #e2e8f0;
+    line-height: 1.45;
+}
+mark {
+    background: rgba(250, 204, 21, 0.28);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 0.12em;
+}
+.cited-badge {
+    display: inline-block;
+    margin-top: 0.55rem;
+    padding: 0.12rem 0.5rem;
+    border-radius: 999px;
+    background: rgba(52, 211, 153, 0.15);
+    color: #6ee7b7;
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+.cited-quote {
+    margin: 0.4rem 0 0 0;
+    padding-left: 0.7rem;
+    border-left: 2px solid #334155;
+    color: #e2e8f0;
+    font-size: 0.92rem;
 }
 a.paper-media, .paper-media {
     flex: 0 0 132px;
@@ -286,22 +460,19 @@ a.paper-media, .paper-media {
     background: #f8fafc;
     display: block;
 }
-.paper-card:has(.has-figure) {
-    flex-direction: column;
-}
 a.paper-media.has-figure, .paper-media.has-figure {
-    flex: none;
-    width: 100%;
+    flex: 0 0 132px;
+    width: 132px;
     height: auto;
-    overflow: visible;
-    background: transparent;
+    overflow: hidden;
+    background: #0b1220;
 }
 .paper-media.has-figure img {
     width: 100%;
-    height: 320px;
-    border-radius: 8px;
+    height: 120px;
     object-fit: contain;
     object-position: center top;
+    background: #f8fafc;
 }
 .media-caption {
     display: block;
@@ -320,6 +491,9 @@ a.paper-media.has-figure, .paper-media.has-figure {
     cursor: pointer;
     color: #93c5fd;
     font-size: 0.86rem;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
 }
 .passage .chunk-text {
     margin-top: 0.45rem;
@@ -348,39 +522,6 @@ a.paper-media.has-figure, .paper-media.has-figure {
     color: rgba(248, 250, 252, 0.9);
     word-break: break-all;
 }
-.relevance-track {
-    margin-top: 0.45rem;
-    height: 4px;
-    border-radius: 999px;
-    background: #1e293b;
-    overflow: hidden;
-}
-.relevance-fill {
-    height: 100%;
-    border-radius: 999px;
-}
-.facet-row {
-    margin: 0.35rem 0 0.55rem 0;
-}
-.facet-label {
-    display: block;
-    color: #94a3b8;
-    font-size: 0.78rem;
-    margin-bottom: 0.3rem;
-}
-.facet-chip {
-    display: inline-block;
-    margin: 0 0.35rem 0.35rem 0;
-    padding: 0.18rem 0.55rem;
-    border-radius: 999px;
-    border: 1px solid #334155;
-    background: #1e293b;
-    color: #e2e8f0;
-    font-size: 0.82rem;
-}
-.chip-count {
-    color: #94a3b8;
-}
 .trust-note {
     color: #cbd5e1;
     font-size: 0.86rem;
@@ -390,14 +531,6 @@ a.paper-media.has-figure, .paper-media.has-figure {
     margin-top: 0.25rem;
     color: #94a3b8;
     font-size: 0.9rem;
-}
-.source-card a {
-    color: #93c5fd;
-}
-.source-score {
-    margin-top: 0.35rem;
-    color: #bfdbfe;
-    font-size: 0.86rem;
 }
 .chunk-text {
     margin-top: 0.6rem;
@@ -416,6 +549,57 @@ a.paper-media.has-figure, .paper-media.has-figure {
     font-size: 0.82rem;
     line-height: 1.45;
 }
+section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {
+    height: 3.75rem !important;
+    padding: 0 0.75rem !important;
+    box-sizing: border-box !important;
+    align-items: center !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    padding-top: 0 !important;
+    padding-bottom: 0.5rem !important;
+}
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: 0.45rem !important;
+}
+section[data-testid="stSidebar"] label[data-testid="stWidgetLabel"] {
+    min-height: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0.15rem !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stElementContainer"]:has(.field-hint) {
+    padding-bottom: 0.85rem;
+}
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-baseweb="slider"] {
+    margin-top: 1.65rem;
+}
+section[data-testid="stSidebar"] button[kind="secondary"] {
+    padding: 0.2rem 0.65rem !important;
+    margin-bottom: 0 !important;
+}
+section[data-testid="stSidebar"] button[kind="secondary"] p {
+    width: auto !important;
+    text-align: center !important;
+    white-space: nowrap !important;
+}
+section[data-testid="stSidebar"] .filter-heading {
+    margin: 0;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    font-weight: 700;
+    color: #f8fafc;
+    font-size: 1.05rem;
+    line-height: 1.2;
+}
+section[data-testid="stSidebar"] .field-hint {
+    margin: 0;
+    color: #94a3b8;
+    font-size: 0.78rem;
+    line-height: 1.3;
+}
 @media (max-width: 640px) {
     .app-header {
         flex-wrap: nowrap;
@@ -430,8 +614,14 @@ a.paper-media.has-figure, .paper-media.has-figure {
         overflow: hidden;
         text-overflow: ellipsis;
     }
+    .app-header, .brand-row, .brand-copy, .paper-card, .paper-body, .point-copy {
+        min-width: 0;
+        max-width: 100%;
+    }
     .arxiv-mark {
         padding: 0.15rem;
+        min-width: 40px;
+        min-height: 40px;
     }
     .arxiv-mark img {
         height: 28px;
@@ -440,14 +630,11 @@ a.paper-media.has-figure, .paper-media.has-figure {
         width: 32px;
         height: 32px;
     }
-    .paper-card:not(:has(.has-figure)) a.paper-media,
-    .paper-card:not(:has(.has-figure)) .paper-media {
-        flex-basis: 84px;
-        width: 84px;
-        height: 112px;
-    }
-    .paper-media.has-figure img {
-        height: 200px;
+    .paper-card a.paper-media,
+    .paper-card .paper-media,
+    a.paper-media.has-figure,
+    .paper-media.has-figure {
+        display: none !important;
     }
 }
 </style>
@@ -463,33 +650,32 @@ def _html(value: object) -> str:
 
 
 def _arxiv_url(paper_id: object) -> str | None:
-    paper_id = str(paper_id or "").strip()
-    if not paper_id:
+    clean = clean_arxiv_id(paper_id)
+    if not clean:
         return None
-    return f"{ARXIV_ABS_BASE_URL}/{paper_id}"
+    return f"{ARXIV_ABS_BASE_URL}/{clean}"
 
 
-def _parse_year_input(raw_value: str) -> tuple[int | None, str | None]:
-    value = raw_value.strip()
-    if not value:
-        return None, None
-    if not value.isdigit():
-        return None, "Year must be a number."
-    year = int(value)
-    if YEAR_MIN_BOUND <= year <= YEAR_MAX_BOUND:
-        return year, None
-    return None, f"Year must be between {YEAR_MIN_BOUND} and {YEAR_MAX_BOUND}."
+def _year_range_value(year_min: int | None, year_max: int | None) -> tuple[int, int]:
+    start = YEAR_MIN_BOUND if year_min is None else int(year_min)
+    end = YEAR_MAX_BOUND if year_max is None else int(year_max)
+    start = min(max(start, YEAR_MIN_BOUND), YEAR_MAX_BOUND)
+    end = min(max(end, YEAR_MIN_BOUND), YEAR_MAX_BOUND)
+    if start > end:
+        start, end = end, start
+    return start, end
 
 
-def query_rag_api(query: str, top_k: int, filters: dict) -> dict:
-    payload = {"query": query, "top_k": top_k, **filters}
-    response = requests.post(
-        QUERY_URL,
-        json=payload,
-        timeout=API_QUERY_TIMEOUT_S,
-    )
-    response.raise_for_status()
-    return response.json()
+def _category_options() -> list[str]:
+    selected = st.session_state.get(CATEGORIES_KEY) or []
+    if isinstance(selected, str):
+        selected = [part.strip() for part in selected.split(",") if part.strip()]
+    options = list(COMMON_ARXIV_CATEGORIES)
+    for value in selected:
+        text = str(value).strip()
+        if text and text not in options:
+            options.append(text)
+    return options
 
 
 def _arxiv_logo_src() -> str:
@@ -527,7 +713,7 @@ def render_header() -> None:
                 </div>
                 <div class="brand-copy">
                     <h1>ArxivLens</h1>
-                    <p>Ask questions about scientific papers from arXiv</p>
+                    <p>Find the papers your research should be cited with.</p>
                 </div>
             </div>
             {logo_html}
@@ -537,185 +723,213 @@ def render_header() -> None:
     )
 
 
-def render_query_form() -> tuple[str, int, dict, bool, str | None]:
-    pending_query = st.session_state.pop("pending_query", None)
-    if pending_query is not None:
-        st.session_state[QUERY_INPUT_KEY] = pending_query
+def _ensure_form_state() -> None:
+    st.session_state.setdefault(QUERY_INPUT_KEY, "")
+    st.session_state.setdefault(TOP_K_KEY, DEFAULT_TOP_K)
+    st.session_state.setdefault(CATEGORIES_KEY, [])
+    st.session_state.setdefault(AUTHORS_KEY, "")
+    st.session_state.setdefault(YEAR_RANGE_KEY, (YEAR_MIN_BOUND, YEAR_MAX_BOUND))
+    st.session_state.setdefault(SORT_KEY, SORT_RELEVANCE)
+    st.session_state.setdefault(CATEGORY_CUSTOM_KEY, "")
+    categories = st.session_state.get(CATEGORIES_KEY)
+    if isinstance(categories, str):
+        st.session_state[CATEGORIES_KEY] = [part.strip() for part in categories.split(",") if part.strip()]
+
+
+def _typed_categories(raw: str) -> list[str]:
+    found: list[str] = []
+    for part in raw.split(","):
+        text = part.strip()
+        if text and text not in found:
+            found.append(text)
+    return found
+
+
+def _consume_typed_categories() -> None:
+    """Move a typed category into the multiselect before that widget is created."""
+    if st.session_state.pop(CLEAR_CATEGORY_CUSTOM_KEY, False):
+        st.session_state[CATEGORY_CUSTOM_KEY] = ""
+    pending = st.session_state.pop(PENDING_CATEGORIES_KEY, None)
+    if not pending:
+        return
+    selected = st.session_state.get(CATEGORIES_KEY) or []
+    if isinstance(selected, str):
+        selected = _typed_categories(selected)
+    else:
+        selected = [str(value).strip() for value in selected if str(value).strip()]
+    for value in pending:
+        if value not in selected:
+            selected.append(value)
+    st.session_state[CATEGORIES_KEY] = selected
+
+
+def _hydrate_search_from_query_params() -> None:
+    if st.session_state.get(SEARCH_HYDRATED_KEY):
+        return
+    query, top_k, filters = decode_search_params(st.query_params)
+    st.session_state[QUERY_INPUT_KEY] = query
+    st.session_state[TOP_K_KEY] = top_k
+    st.session_state[CATEGORIES_KEY] = list(filters["categories"])
+    st.session_state[AUTHORS_KEY] = ", ".join(filters["authors"])
+    st.session_state[YEAR_RANGE_KEY] = _year_range_value(filters["year_min"], filters["year_max"])
+    st.session_state[SEARCH_HYDRATED_KEY] = True
+    if query:
+        st.session_state["auto_query"] = query
+
+
+def _publish_pending_example() -> None:
+    """Write a chip's preset into the URL before the sidebar widgets render."""
+    filters = st.session_state.pop("pending_example_filters", None)
+    if filters is None:
+        return
+    query = str(st.session_state.get(QUERY_INPUT_KEY) or "")
+    top_k = int(st.session_state.get(TOP_K_KEY, DEFAULT_TOP_K))
+    _persist_search_params(query, top_k, filters)
+
+
+def _persist_search_params(query: str, top_k: int, filters: dict) -> None:
+    desired = encode_search_params(query, top_k, filters)
+    if present_search_params(st.query_params) == desired:
+        return
+    st.query_params.from_dict(desired)
+
+
+def _filters_from_sidebar(categories: list, authors_raw: str, year_range: tuple[int, int]) -> dict:
+    selected_categories: list[str] = []
+    for value in categories:
+        selected_categories.extend(part.strip() for part in str(value).split(",") if part.strip())
+    year_min, year_max = year_range
+    # The slider's outer bounds mean "no year filter", so undated papers stay in the result.
+    return {
+        "categories": selected_categories,
+        "authors": [part.strip() for part in authors_raw.split(",") if part.strip()],
+        "year_min": None if int(year_min) <= YEAR_MIN_BOUND else int(year_min),
+        "year_max": None if int(year_max) >= YEAR_MAX_BOUND else int(year_max),
+    }
+
+
+def _on_clear_all_filters() -> None:
+    clear_all_filters(
+        st.session_state,
+        st.query_params,
+        categories_key=CATEGORIES_KEY,
+        authors_key=AUTHORS_KEY,
+        year_key=YEAR_RANGE_KEY,
+        extra_blank_keys=(CATEGORY_CUSTOM_KEY,),
+        pop_keys=(PENDING_CATEGORIES_KEY, CLEAR_CATEGORY_CUSTOM_KEY),
+    )
+
+
+def _on_clear_author_filter() -> None:
+    clear_author_filter(st.session_state, st.query_params, authors_key=AUTHORS_KEY)
+
+
+def _sidebar_filter_state() -> dict:
+    categories = st.session_state.get(CATEGORIES_KEY) or []
+    if isinstance(categories, str):
+        categories = _typed_categories(categories)
+    else:
+        categories = list(categories)
+    year_range = st.session_state.get(YEAR_RANGE_KEY, (YEAR_MIN_BOUND, YEAR_MAX_BOUND))
+    if not isinstance(year_range, (list, tuple)) or len(year_range) != 2:
+        year_range = (YEAR_MIN_BOUND, YEAR_MAX_BOUND)
+    return _filters_from_sidebar(
+        categories,
+        str(st.session_state.get(AUTHORS_KEY) or ""),
+        (int(year_range[0]), int(year_range[1])),
+    )
+
+
+def render_sidebar() -> tuple[int, dict]:
+    _ensure_form_state()
+    _consume_typed_categories()
+    with st.sidebar:
+        heading = filters_heading(active_filter_count(_sidebar_filter_state()))
+        title_col, clear_col = st.columns([1.7, 1], vertical_alignment="center", gap="small")
+        title_col.markdown(
+            f'<p class="filter-heading">{html.escape(heading)}</p>',
+            unsafe_allow_html=True,
+        )
+        clear_col.button("Clear all", on_click=_on_clear_all_filters, key="clear_all_filters")
+        categories = st.multiselect(
+            "Categories",
+            options=_category_options(),
+            key=CATEGORIES_KEY,
+            placeholder="Choose categories",
+        )
+        custom = st.text_input(
+            "Add category",
+            key=CATEGORY_CUSTOM_KEY,
+            placeholder="cs.IR",
+            help="Any arXiv category code. It is added to Categories.",
+        )
+        typed = [value for value in _typed_categories(custom) if value not in categories]
+        if typed:
+            st.session_state[PENDING_CATEGORIES_KEY] = typed
+            st.session_state[CLEAR_CATEGORY_CUSTOM_KEY] = True
+            st.rerun()
+        year_range = st.slider(
+            "Year",
+            min_value=YEAR_MIN_BOUND,
+            max_value=YEAR_MAX_BOUND,
+            key=YEAR_RANGE_KEY,
+        )
+        authors_raw = st.text_input("Author", placeholder="Yann LeCun", key=AUTHORS_KEY)
+        st.markdown(
+            f'<p class="field-hint">{html.escape(AUTHOR_INPUT_HINT)}</p>',
+            unsafe_allow_html=True,
+        )
+        st.radio(
+            "Sort by",
+            options=[SORT_RELEVANCE, SORT_NEWEST],
+            horizontal=True,
+            key=SORT_KEY,
+        )
+        top_k = st.number_input(
+            "Results to show",
+            min_value=UI_MIN_TOP_K,
+            max_value=UI_MAX_TOP_K,
+            step=1,
+            key=TOP_K_KEY,
+        )
+    return int(top_k), _filters_from_sidebar(list(categories), authors_raw, tuple(year_range))
+
+
+def render_query_form() -> tuple[str, bool]:
+    _ensure_form_state()
     with st.form("query-form", clear_on_submit=False):
-        st.markdown('<div class="query-label">Ask a question</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="query-label">Describe your research topic or question</div>',
+            unsafe_allow_html=True,
+        )
         query = st.text_area(
-            "What do you want to learn from arXiv papers?",
+            "Describe your research topic or question",
             placeholder="Enter your question...",
             label_visibility="collapsed",
             height=110,
             key=QUERY_INPUT_KEY,
         )
-        st.markdown(
-            '<div class="query-hint">Tip: Ask specific questions to get better cited answers.</div>',
-            unsafe_allow_html=True,
-        )
-        with st.expander("Advanced retrieval settings", expanded=False):
-            top_k = st.slider(
-                "Sources to retrieve (higher may improve coverage but can be slower)",
-                min_value=UI_MIN_TOP_K,
-                max_value=UI_MAX_TOP_K,
-                value=DEFAULT_TOP_K,
-            )
-            categories_raw = st.text_input(
-                "Categories (comma-separated, e.g. cs.CL, cs.AI)",
-                placeholder="cs.CL, cs.AI",
-            )
-            authors_raw = st.text_input(
-                "Author keywords (comma-separated, optional)",
-                placeholder="Yann LeCun, Geoffrey Hinton",
-            )
-            year_col_min, year_col_max = st.columns(2)
-            with year_col_min:
-                year_min_raw = st.text_input("Year from (optional)", placeholder="2019")
-            with year_col_max:
-                year_max_raw = st.text_input("Year to (optional)", placeholder="2024")
         ask_clicked = st.form_submit_button("Ask")
-    year_min, year_min_error = _parse_year_input(year_min_raw)
-    year_max, year_max_error = _parse_year_input(year_max_raw)
-    filters = {
-        "categories": [value.strip() for value in categories_raw.split(",") if value.strip()],
-        "authors": [value.strip() for value in authors_raw.split(",") if value.strip()],
-        "year_min": year_min,
-        "year_max": year_max,
-    }
-    return query, top_k, filters, ask_clicked, year_min_error or year_max_error
+    return query, ask_clicked
 
 
-def _chunk_confidence(chunk: dict) -> tuple[str, str]:
+def _confidence_band(chunk: dict) -> str | None:
     score = chunk.get("reranker_score")
     if score is None:
         score = chunk.get("vector_score")
     if score is None:
-        return "N/A", "Unavailable"
-
+        return None
     score = float(score)
     score = min(max(score, 0.0), 1.0)
     if score >= UI_CONFIDENCE_HIGH:
-        band = "High"
-    elif score >= UI_CONFIDENCE_MEDIUM:
-        band = "Medium"
-    else:
-        band = "Low"
-    return f"{score:.2f}", band
-
-
-def _as_list(value: object) -> list:
-    if isinstance(value, str):
-        return [value] if value.strip() else []
-    if isinstance(value, list):
-        return value
-    return []
+        return "High"
+    if score >= UI_CONFIDENCE_MEDIUM:
+        return "Medium"
+    return "Low"
 
 
 def _paper_id_from_metadata(metadata: dict) -> str:
     return str(metadata.get("doc_id") or metadata.get("id") or metadata.get("paper_id") or "").strip()
-
-
-def _metadata_by_paper(chunks: list) -> dict[str, dict]:
-    found: dict[str, dict] = {}
-    for chunk in chunks:
-        metadata = chunk.get("metadata") or {}
-        paper_id = _paper_id_from_metadata(metadata)
-        if paper_id and paper_id not in found:
-            found[paper_id] = metadata
-    return found
-
-
-def _relevance_html(score_value: str, score_band: str) -> str:
-    color = BAND_COLORS.get(score_band)
-    if color is None:
-        return f'<div class="source-score">Relevance: {_html(score_value)}</div>'
-    try:
-        width = max(0.0, min(float(score_value), 1.0)) * 100
-    except ValueError:
-        width = 0.0
-    return (
-        '<div class="relevance">'
-        f'<div class="relevance-track"><div class="relevance-fill" style="width:{width:.0f}%;background:{color}"></div></div>'
-        f'<div class="source-score">Relevance {_html(score_value)} · {_html(score_band)}</div>'
-        "</div>"
-    )
-
-
-def _passage_html(text: str, title: str) -> str:
-    preview, truncated = passage_preview(text, title)
-    if not preview:
-        return ""
-    if not truncated:
-        return f'<div class="chunk-text">{_html(preview)}</div>'
-    full = passage_body(text, title)
-    return (
-        '<div class="passage-block">'
-        f'<div class="chunk-text chunk-preview">{_html(preview)}</div>'
-        '<details class="passage">'
-        "<summary>Show passage</summary>"
-        f'<div class="chunk-text">{_html(full)}</div>'
-        "</details>"
-        "</div>"
-    )
-
-
-def _paper_card_html(
-    *,
-    title: str,
-    paper_id: str,
-    metadata: dict,
-    figure_urls: dict[str, str | None],
-    body_html: str,
-    score_band: str | None = None,
-    include_figure: bool = True,
-) -> str:
-    clean_id = clean_arxiv_id(paper_id)
-    figure_url = figure_urls.get(clean_id) if clean_id and include_figure else None
-    media = paper_media_html(
-        paper_id=clean_id or paper_id,
-        category=primary_category(metadata.get("categories")),
-        year=metadata.get("year"),
-        figure_url=figure_url,
-        abs_url=_arxiv_url(paper_id),
-    )
-    band_color = BAND_COLORS.get(score_band or "", "#334155")
-    return (
-        f'<article class="paper-card" style="--band:{band_color}">'
-        f"{media}"
-        '<div class="paper-body">'
-        f"<h3>{_html(title)}</h3>"
-        f"{body_html}"
-        "</div></article>"
-    )
-
-
-def _open_arxiv_html(arxiv_url: str | None, label: str) -> str:
-    if not arxiv_url:
-        return ""
-    href = html.escape(arxiv_url, quote=True)
-    return (
-        f'<div class="source-meta"><a href="{href}" target="_blank" rel="noopener noreferrer">'
-        f"{_html(label)}</a></div>"
-    )
-
-
-def _facet_row(label: str, items: list, colored: bool) -> str:
-    chips = []
-    for item in items:
-        value = item.get("value")
-        count = item.get("count")
-        style = ""
-        if colored:
-            color = category_color(str(value or ""))
-            style = f' style="border-color:{color};color:{color};background:{color}22"'
-        chips.append(
-            f'<span class="facet-chip"{style}>{_html(value)} '
-            f'<span class="chip-count">{_html(count)}</span></span>'
-        )
-    if not chips:
-        return ""
-    return f'<div class="facet-row"><span class="facet-label">{label}</span>{"".join(chips)}</div>'
 
 
 def _load_result_figures(paper_ids: list[str]) -> dict[str, str | None]:
@@ -725,137 +939,122 @@ def _load_result_figures(paper_ids: list[str]) -> dict[str, str | None]:
     return load_figure_urls(paper_ids)
 
 
-def render_result(result: dict) -> None:
-    chunks = result.get("context_chunks", [])
-    papers = _metadata_by_paper(chunks)
-    citations = result.get("citations", [])
-    citation_ids = [
-        str(item.get("arxiv_id") or "").strip()
-        for item in citations
-        if str(item.get("quote") or "").strip()
-    ]
-    figure_urls = _load_result_figures(citation_ids)
-
-    st.markdown('<div class="result-container">', unsafe_allow_html=True)
-    st.markdown("<h2>Answer</h2>", unsafe_allow_html=True)
-    st.markdown(
-        render_answer_html(result, abs_base_url=ARXIV_ABS_BASE_URL),
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div class="trust-note">AI-generated synthesis. Verify details with linked sources.</div>',
-        unsafe_allow_html=True,
-    )
-    rewritten_query = str(result.get("rewritten_query") or "").strip()
-    original_query = str(result.get("query") or "").strip()
-    if rewritten_query and rewritten_query != original_query:
+def render_summary(answer: dict) -> None:
+    with st.expander(SUMMARY_TITLE, expanded=True):
         st.markdown(
-            f'<div class="source-meta"><strong>Retrieval query:</strong> {_html(rewritten_query)}</div>',
+            render_answer_html(answer),
             unsafe_allow_html=True,
         )
-    if citations:
-        st.markdown("<h2>Citations</h2>", unsafe_allow_html=True)
-        for item in citations:
-            quote = str(item.get("quote") or "").strip()
-            if not quote:
-                continue
-            arxiv_id = str(item.get("arxiv_id") or "").strip()
-            metadata = papers.get(arxiv_id, {})
-            title = str(item.get("title") or "").strip() or arxiv_id or "Untitled"
-            body = (
-                f"{_open_arxiv_html(_arxiv_url(arxiv_id), f'Open on arXiv ({arxiv_id})' if arxiv_id else 'Open on arXiv')}"
-                f'<div class="chunk-text">"{_html(quote)}"</div>'
-            )
-            st.markdown(
-                _paper_card_html(
-                    title=title,
-                    paper_id=arxiv_id,
-                    metadata=metadata,
-                    figure_urls=figure_urls,
-                    body_html=body,
-                ),
-                unsafe_allow_html=True,
-            )
-
-    facets = result.get("facets", {})
-    if facets:
-        st.markdown("<h2>Facets</h2>", unsafe_allow_html=True)
-        facet_html = "".join(
-            (
-                _facet_row("Years", facets.get("years", [])[:UI_FACET_LIMIT], False),
-                _facet_row("Categories", facets.get("categories", [])[:UI_FACET_LIMIT], True),
-                _facet_row("Authors", facets.get("authors", [])[:UI_FACET_LIMIT], False),
-            )
-        )
-        if facet_html:
-            st.markdown(facet_html, unsafe_allow_html=True)
-
-    st.markdown("<h2>Sources</h2>", unsafe_allow_html=True)
-    for chunk in chunks:
-        metadata = chunk.get("metadata") or {}
-        title = metadata.get("title", "Untitled")
-        source = metadata.get("source", "Unknown")
-        paper_id = _paper_id_from_metadata(metadata)
-        year = metadata.get("year")
-        categories = _as_list(metadata.get("categories"))
-        authors = _as_list(metadata.get("authors"))
-        category_text = ", ".join(str(category) for category in categories)
-        author_text = ", ".join(str(author) for author in authors[:UI_MAX_AUTHORS_SHOWN])
-        score_value, score_band = _chunk_confidence(chunk)
-        metadata_segments = []
-        source_text = str(source)
-        if source_text and "/" not in source_text and "\\" not in source_text:
-            metadata_segments.append(f"Source: {_html(source_text)}")
-        if year:
-            metadata_segments.append(f"Year: {_html(year)}")
-        if category_text:
-            metadata_segments.append(f"Categories: {_html(category_text)}")
-        if author_text:
-            metadata_segments.append(f"Authors: {_html(author_text)}")
-        meta_html = (
-            f'<div class="source-meta">{" | ".join(metadata_segments)}</div>'
-            if metadata_segments
-            else ""
-        )
-        already_cited = clean_arxiv_id(paper_id) in {
-            clean_arxiv_id(arxiv_id) for arxiv_id in citation_ids
-        }
-        body = (
-            f"{_open_arxiv_html(_arxiv_url(paper_id), 'Open on arXiv')}"
-            f"{meta_html}"
-            f"{_relevance_html(score_value, score_band)}"
-            f"{_passage_html(str(chunk.get('text', '')), str(title))}"
-        )
         st.markdown(
-            _paper_card_html(
-                title=str(title),
+            '<div class="trust-note">AI-generated synthesis. Verify details with linked sources.</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def render_summary_error(message: str) -> None:
+    with st.expander(SUMMARY_TITLE, expanded=True):
+        st.markdown(f'<div class="error-box">{_html(message)}</div>', unsafe_allow_html=True)
+
+
+def _render_card_actions(paper_id: str, metadata: dict) -> None:
+    actions: list[tuple[str, str]] = []
+    abs_url = _arxiv_url(paper_id)
+    pdf_url = arxiv_pdf_url(paper_id)
+    if abs_url:
+        actions.append(("arXiv", abs_url))
+    if pdf_url:
+        actions.append(("PDF", pdf_url))
+    copy_count = 2 if clean_arxiv_id(paper_id) else 1
+    columns = st.columns(len(actions) + copy_count)
+    for index, (label, url) in enumerate(actions):
+        columns[index].link_button(label, url, use_container_width=True)
+    bibtex_column = columns[len(actions)]
+    with bibtex_column.popover("Copy BibTeX", use_container_width=True):
+        st.code(build_bibtex(metadata, paper_id), language=None)
+    clean_id = clean_arxiv_id(paper_id)
+    if clean_id:
+        with columns[len(actions) + 1].popover("Copy ID", use_container_width=True):
+            st.code(clean_id, language=None)
+
+
+def render_papers(
+    result: dict,
+    answer: dict | None = None,
+    filters: dict | None = None,
+    *,
+    show_author_clear: bool = True,
+) -> None:
+    filters = filters or {}
+    chunks = order_papers(list(result.get("context_chunks") or []), st.session_state.get(SORT_KEY, SORT_RELEVANCE))
+    paper_ids = [_paper_id_from_metadata(chunk.get("metadata") or {}) for chunk in chunks if isinstance(chunk, dict)]
+    figure_urls = _load_result_figures([paper_id for paper_id in paper_ids if paper_id])
+    query = str(result.get("query") or "")
+
+    st.markdown('<div class="result-container">', unsafe_allow_html=True)
+    st.markdown("<h2>Papers</h2>", unsafe_allow_html=True)
+    if not chunks:
+        message = results_empty_message(0, filters) or ""
+        st.markdown(f'<div class="source-meta">{html.escape(message)}</div>', unsafe_allow_html=True)
+        if (
+            show_author_clear
+            and author_filter_name(filters)
+            and str(st.session_state.get(AUTHORS_KEY) or "").strip()
+        ):
+            st.button("Clear author", on_click=_on_clear_author_filter, key="clear_author_filter")
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        metadata = chunk.get("metadata") or {}
+        title = str(metadata.get("title") or "Untitled")
+        paper_id = _paper_id_from_metadata(metadata)
+        clean_id = clean_arxiv_id(paper_id)
+        figure_url = figure_urls.get(clean_id) if clean_id else None
+        st.markdown(
+            paper_card_html(
+                title=title,
                 paper_id=paper_id,
                 metadata=metadata,
-                figure_urls=figure_urls,
-                body_html=body,
-                score_band=score_band,
-                include_figure=not already_cited,
+                text=str(chunk.get("text") or ""),
+                query=query,
+                score_band=_confidence_band(chunk),
+                figure_url=figure_url,
+                quotes=citation_quotes(answer, paper_id),
+                abs_url=_arxiv_url(paper_id),
             ),
             unsafe_allow_html=True,
         )
+        _render_card_actions(paper_id, metadata)
     st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _apply_example(index: int) -> None:
+    """Fill the query, preset the sidebar, and run that example on the next script run."""
+    example = EXAMPLE_QUESTIONS[index]
+    filters = example_retrieval_filters(example.get("filters") or {})
+    st.session_state[QUERY_INPUT_KEY] = str(example["query"])
+    st.session_state[CATEGORIES_KEY] = list(filters["categories"])
+    st.session_state[AUTHORS_KEY] = ", ".join(filters["authors"])
+    st.session_state[YEAR_RANGE_KEY] = _year_range_value(filters["year_min"], filters["year_max"])
+    st.session_state[CATEGORY_CUSTOM_KEY] = ""
+    st.session_state.pop(PENDING_CATEGORIES_KEY, None)
+    st.session_state.pop(CLEAR_CATEGORY_CUSTOM_KEY, None)
+    st.session_state["auto_query"] = str(example["query"])
+    st.session_state["pending_example_filters"] = filters
 
 
 def render_examples() -> None:
     st.markdown(
-        """
-        <div class="examples">
-            <h2>Try a question</h2>
-            <p>Each one searches the papers in your index.</p>
-        </div>
-        """,
+        f'<p class="example-prompt">{html.escape(EXAMPLE_PROMPT)}</p>',
         unsafe_allow_html=True,
     )
-    for index, example in enumerate(EXAMPLE_QUESTIONS):
-        if st.button(example, type="secondary", use_container_width=True, key=f"example-{index}"):
-            st.session_state["pending_query"] = example
-            st.session_state["auto_query"] = example
-            st.rerun()
+    with st.container(key="example_chips"):
+        for index, example in enumerate(EXAMPLE_QUESTIONS):
+            st.button(
+                example_chip_label(example),
+                key=f"example-{index}",
+                on_click=_apply_example,
+                args=(index,),
+            )
 
 
 def render_footer() -> None:
@@ -871,58 +1070,95 @@ def render_footer() -> None:
     )
 
 
-def _store_query_outcome(result: dict | None, error: str | None) -> None:
-    if result is not None:
-        st.session_state[RESULT_KEY] = result
-        st.session_state.pop(ERROR_KEY, None)
-        return
-    if error:
-        st.session_state[ERROR_KEY] = error
-        st.session_state.pop(RESULT_KEY, None)
+def _clear_results() -> None:
+    st.session_state.pop(SEARCH_RESULT_KEY, None)
+    st.session_state.pop(APPLIED_FILTERS_KEY, None)
+    st.session_state.pop(ANSWER_KEY, None)
+    st.session_state.pop(ANSWER_ERROR_KEY, None)
 
 
 def main() -> None:
-    st.set_page_config(page_title="ArxivLens", page_icon=":books:", layout="centered")
+    st.set_page_config(page_title="ArxivLens", page_icon=":books:", layout="wide")
     inject_styles()
+    _hydrate_search_from_query_params()
+    _publish_pending_example()
+    top_k, filters = render_sidebar()
     render_header()
 
-    query, top_k, filters, ask_clicked, year_error = render_query_form()
+    query, ask_clicked = render_query_form()
     auto_query = st.session_state.pop("auto_query", None)
     submitted_query = auto_query if auto_query else query
+    searching = bool(ask_clicked or auto_query)
+    has_results = bool(st.session_state.get(SEARCH_RESULT_KEY))
+    summary_slot = st.empty() if searching or has_results else None
+    papers_slot = st.empty() if searching or has_results else None
 
-    if ask_clicked or auto_query:
+    if searching:
         error = None
-        result = None
         if not str(submitted_query).strip():
             error = "Please enter a question first."
-        elif year_error:
-            error = year_error
-        elif (
-            filters.get("year_min") is not None
-            and filters.get("year_max") is not None
-            and filters["year_min"] > filters["year_max"]
-        ):
-            error = "Year from must be less than or equal to Year to."
         else:
+            submitted_text = str(submitted_query).strip()
+
+            def on_papers(papers: dict) -> None:
+                st.session_state[SEARCH_RESULT_KEY] = papers
+                st.session_state[APPLIED_FILTERS_KEY] = filters
+                st.session_state.pop(ANSWER_KEY, None)
+                st.session_state.pop(ANSWER_ERROR_KEY, None)
+                st.session_state.pop(ERROR_KEY, None)
+                with papers_slot.container():
+                    render_papers(papers, filters=filters, show_author_clear=False)
+
+            def search_with_spinner(text: str, size: int, selected_filters: dict) -> dict:
+                with st.spinner("Retrieving papers..."):
+                    return search_papers(text, size, selected_filters)
+
+            def answer_with_spinner(text: str, chunks: list) -> dict:
+                with st.spinner("Writing the summary..."):
+                    return request_answer(text, chunks)
+
             try:
-                with st.status("Running pipeline...", expanded=False) as status:
-                    status.update(label="Retrieving papers...", state="running", expanded=True)
-                    result = query_rag_api(str(submitted_query).strip(), top_k, filters)
-                    status.update(label="Completed", state="complete", expanded=False)
+                _papers, answer, answer_error = search_then_answer(
+                    submitted_text,
+                    top_k,
+                    filters,
+                    on_papers,
+                    search=search_with_spinner,
+                    answer=answer_with_spinner,
+                )
             except requests.exceptions.RequestException as exc:
                 error = (
                     "Could not reach backend API. Make sure `python main.py` is running "
                     f"on `{API_BASE_URL}`. Details: {exc}"
                 )
-        _store_query_outcome(result, error)
+            else:
+                if answer is not None:
+                    st.session_state[ANSWER_KEY] = answer
+                    st.session_state.pop(ANSWER_ERROR_KEY, None)
+                else:
+                    st.session_state.pop(ANSWER_KEY, None)
+                    st.session_state[ANSWER_ERROR_KEY] = answer_error
+            _persist_search_params(submitted_text, top_k, filters)
+        if error:
+            st.session_state[ERROR_KEY] = error
+            _clear_results()
 
     error = st.session_state.get(ERROR_KEY)
-    result = st.session_state.get(RESULT_KEY)
+    papers = st.session_state.get(SEARCH_RESULT_KEY)
     if error:
         st.markdown(f'<div class="error-box">Error: {_html(error)}</div>', unsafe_allow_html=True)
 
-    if result:
-        render_result(result)
+    if papers and summary_slot is not None and papers_slot is not None:
+        with summary_slot:
+            answer_error = st.session_state.get(ANSWER_ERROR_KEY)
+            answer = st.session_state.get(ANSWER_KEY)
+            if answer_error:
+                render_summary_error(answer_error)
+            elif answer:
+                render_summary(answer)
+        with papers_slot.container():
+            applied_filters = st.session_state.get(APPLIED_FILTERS_KEY, filters)
+            render_papers(papers, answer=st.session_state.get(ANSWER_KEY), filters=applied_filters)
     else:
         render_examples()
     render_footer()

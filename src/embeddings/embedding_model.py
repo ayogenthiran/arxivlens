@@ -1,5 +1,3 @@
-# src/embeddings/embedding_model.py
-
 import logging
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -84,65 +82,25 @@ class EmbeddingModel:
     """
 
     def __init__(self, model_name: Optional[str] = None):
-        """
-        Initialize the embedding model.
-
-        Args:
-            model_name: Name of the sentence-transformers model to use
-        """
         configured_name = model_name or EMBEDDING_MODEL_NAME
         self.model_name = self._normalize_model_name(configured_name)
         self.model = None
 
     def load_model(self):
-        """
-        Load the embedding model if not already loaded.
-        """
         if self.model is None:
-            try:
-                self.model = SentenceTransformer(self.model_name)
-                logger.info(f"Loaded embedding model: {self.model_name}")
-            except Exception as e:
-                logger.error(f"Failed to load embedding model: {e}")
-                raise
+            self.model = SentenceTransformer(self.model_name)
+            logger.info("Loaded embedding model: %s", self.model_name)
 
     def embed_texts(self, texts: List[str], show_progress_bar: bool = True) -> np.ndarray:
-        """
-        Generate embeddings for a list of texts.
-
-        Texts within the model limit are embedded in one batch. Longer texts
-        are windowed so tokens past that limit are included, then pooled back
-        to one vector each.
-
-        Args:
-            texts: List of text strings to embed
-            show_progress_bar: Show the sentence-transformers progress bar
-
-        Returns:
-            Array of L2-normalized embeddings
-        """
+        """One L2-normalized vector per text. Texts past the model limit are windowed, then pooled."""
         self._ensure_model_loaded()
-
-        try:
-            return self._embed_texts(
-                texts,
-                show_progress_bar=show_progress_bar,
-                normalize_embeddings=True,
-            )
-        except Exception as e:
-            logger.error(f"Error generating embeddings: {e}")
-            raise
+        return self._embed_texts(
+            texts,
+            show_progress_bar=show_progress_bar,
+            normalize_embeddings=True,
+        )
 
     def embed_chunks(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Generate embeddings for a list of document chunks.
-
-        Args:
-            chunks: List of chunk dictionaries with text and metadata
-
-        Returns:
-            List of chunks with embeddings added
-        """
         if not chunks:
             return []
 
@@ -152,31 +110,18 @@ class EmbeddingModel:
         for i, chunk in enumerate(chunks):
             chunk["embedding"] = embeddings[i].tolist()
 
-        logger.info(f"Generated embeddings for {len(chunks)} chunks.")
+        logger.info("Generated embeddings for %s chunks.", len(chunks))
         return chunks
 
     def embed_query(self, query: str) -> np.ndarray:
-        """
-        Generate embedding for a query string.
-
-        Args:
-            query: Query text
-
-        Returns:
-            Query embedding (1D numpy array), L2-normalized
-        """
+        """L2-normalized query vector, using the same windowing as document text."""
         self._ensure_model_loaded()
-
-        try:
-            embedding = self._embed_texts(
-                [query],
-                show_progress_bar=False,
-                normalize_embeddings=True,
-            )
-            return np.asarray(embedding[0])
-        except Exception as e:
-            logger.error(f"Error generating query embedding: {e}")
-            raise
+        embedding = self._embed_texts(
+            [query],
+            show_progress_bar=False,
+            normalize_embeddings=True,
+        )
+        return np.asarray(embedding[0])
 
     def _embed_texts(
         self,
@@ -333,14 +278,10 @@ class EmbeddingModel:
         return [int(token_id) for token_id in token_ids]
 
     def _ensure_model_loaded(self):
-        """Helper to make sure the model is loaded before using."""
         if self.model is None:
             self.load_model()
 
     def _normalize_model_name(self, model_name: str) -> str:
-        """
-        Normalize user-provided model names to valid sentence-transformers IDs.
-        """
         normalized = model_name.strip()
 
         # OpenAI embedding model names are not valid SentenceTransformer model IDs.

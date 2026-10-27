@@ -32,12 +32,12 @@ from src.vector_store import VectorStore
 def _read_checkpoint(checkpoint_path: str) -> int:
     if not os.path.exists(checkpoint_path):
         return 0
-    try:
-        with open(checkpoint_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return int(data.get("processed_docs", 0))
-    except Exception:
-        return 0
+    with open(checkpoint_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    processed = int(data.get("processed_docs", 0))
+    if processed < 0:
+        raise ValueError(f"Checkpoint processed_docs is negative: {processed}")
+    return processed
 
 
 def _write_checkpoint(checkpoint_path: str, processed_docs: int) -> None:
@@ -122,40 +122,31 @@ def main():
     if "--process-data" in args:
         print("[INFO] Processing documents...")
         
-        data_dir = DATA_DIR
-        output_dir = OUTPUT_DIR
-        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-        batch_docs = INGEST_BATCH_DOCS
-        max_docs = MAX_DOCS
-        ingest_year_min = INGEST_YEAR_MIN
         ingest_categories = {
             item.strip()
             for item in INGEST_CATEGORIES.split(",")
             if item.strip()
         }
-        retry_max_attempts = INGEST_RETRY_MAX_ATTEMPTS
-        retry_base_delay_s = INGEST_RETRY_BASE_DELAY_S
-        checkpoint_path = os.path.join(output_dir, "ingest_checkpoint.json")
-        chunks_jsonl_path = os.path.join(output_dir, "processed_chunks.jsonl")
-        reset_ingest = RESET_INGEST
+        checkpoint_path = os.path.join(OUTPUT_DIR, "ingest_checkpoint.json")
+        chunks_jsonl_path = os.path.join(OUTPUT_DIR, "processed_chunks.jsonl")
 
-        if reset_ingest:
+        if RESET_INGEST:
             if os.path.exists(checkpoint_path):
                 os.remove(checkpoint_path)
             if os.path.exists(chunks_jsonl_path):
                 os.remove(chunks_jsonl_path)
 
         resume_from = _read_checkpoint(checkpoint_path)
-        hybrid_max_docs = HYBRID_BM25_MAX_DOCS
         print(
-            f"[INFO] Ingestion config -> batch_docs={batch_docs}, max_docs={max_docs or 'ALL'}, "
+            f"[INFO] Ingestion config -> batch_docs={INGEST_BATCH_DOCS}, max_docs={MAX_DOCS or 'ALL'}, "
             f"resume_from={resume_from}, categories={sorted(ingest_categories) or 'ALL'}, "
-            f"year_min={ingest_year_min or 'ANY'}, store={VECTOR_STORE_DIR}"
+            f"year_min={INGEST_YEAR_MIN or 'ANY'}, store={VECTOR_STORE_DIR}"
         )
-        if max_docs == 0 or max_docs > hybrid_max_docs:
+        if MAX_DOCS == 0 or MAX_DOCS > HYBRID_BM25_MAX_DOCS:
             print(
-                f"[WARN] This ingest can pass HYBRID_BM25_MAX_DOCS={hybrid_max_docs}. "
+                f"[WARN] This ingest can pass HYBRID_BM25_MAX_DOCS={HYBRID_BM25_MAX_DOCS}. "
                 "Above that size, search drops BM25 and uses vectors only."
             )
 
@@ -166,7 +157,7 @@ def main():
         processed_chunks = 0
         current_batch_docs = []
         ingest_started_at = time.perf_counter()
-        total_target_docs = max_docs if max_docs > 0 else None
+        total_target_docs = MAX_DOCS if MAX_DOCS > 0 else None
 
         def _log_progress(prefix: str) -> None:
             elapsed_s = max(time.perf_counter() - ingest_started_at, 1e-6)
@@ -186,7 +177,7 @@ def main():
                 f"docs/min={docs_per_min:.1f}, chunks/min={chunks_per_min:.1f}, eta={eta}"
             )
 
-        for idx, doc in enumerate(document_processor.iter_documents(data_dir, min_year=ingest_year_min)):
+        for idx, doc in enumerate(document_processor.iter_documents(DATA_DIR, min_year=INGEST_YEAR_MIN)):
             if idx < resume_from:
                 continue
 
@@ -196,15 +187,15 @@ def main():
             paper_year = doc.get("submission_year")
             if not isinstance(paper_year, int):
                 paper_year = doc.get("year")
-            if ingest_year_min and (not isinstance(paper_year, int) or paper_year < ingest_year_min):
+            if INGEST_YEAR_MIN and (not isinstance(paper_year, int) or paper_year < INGEST_YEAR_MIN):
                 continue
 
-            if max_docs > 0 and processed_docs >= max_docs:
+            if MAX_DOCS > 0 and processed_docs >= MAX_DOCS:
                 break
 
             current_batch_docs.append(doc)
 
-            if len(current_batch_docs) < batch_docs:
+            if len(current_batch_docs) < INGEST_BATCH_DOCS:
                 continue
 
             added_docs, added_chunks = _flush_ingest_batch(
@@ -213,8 +204,8 @@ def main():
                 embedding_model,
                 vector_store,
                 chunks_jsonl_path,
-                retry_max_attempts,
-                retry_base_delay_s,
+                INGEST_RETRY_MAX_ATTEMPTS,
+                INGEST_RETRY_BASE_DELAY_S,
             )
             processed_docs += added_docs
             processed_chunks += added_chunks
@@ -229,8 +220,8 @@ def main():
                 embedding_model,
                 vector_store,
                 chunks_jsonl_path,
-                retry_max_attempts,
-                retry_base_delay_s,
+                INGEST_RETRY_MAX_ATTEMPTS,
+                INGEST_RETRY_BASE_DELAY_S,
             )
             processed_docs += added_docs
             processed_chunks += added_chunks

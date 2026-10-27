@@ -1,17 +1,16 @@
-# src/api/server.py
-
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 
-from src.llm.llm_interface import INSUFFICIENT_CONTEXT_ANSWER
+from src.llm.llm_interface import EMPTY_ANSWER, INSUFFICIENT_CONTEXT_ANSWER
 from src.settings import (
+    APP_VERSION,
     CORS_ALLOW_ORIGINS,
     DEFAULT_TOP_K,
     HOST,
@@ -24,7 +23,6 @@ from src.settings import (
 logger = logging.getLogger(__name__)
 
 class QueryRequest(BaseModel):
-    """Request model for query endpoint"""
     query: str
     top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=MAX_QUERY_TOP_K)
     authors: List[str] = Field(default_factory=list)
@@ -39,7 +37,6 @@ class QueryRequest(BaseModel):
         return self
 
 class QueryResponse(BaseModel):
-    """Response model for query endpoint"""
     answer: str
     summary: str = ""
     points: List[Dict[str, Any]] = Field(default_factory=list)
@@ -49,13 +46,36 @@ class QueryResponse(BaseModel):
     query: str
     rewritten_query: str
 
+
+class SearchResponse(BaseModel):
+    """Retrieved papers and facet counts. No model output."""
+    context_chunks: List[Dict[str, Any]]
+    facets: Dict[str, Any]
+    query: str
+
+
+class AnswerRequest(BaseModel):
+    """The user query plus chunks from /api/search, or the ids of those chunks."""
+    query: str
+    chunk_ids: Optional[List[str]] = None
+    context_chunks: Optional[List[Dict[str, Any]]] = None
+
+    @model_validator(mode="after")
+    def require_chunks_or_ids(self):
+        if self.context_chunks is None and not self.chunk_ids:
+            raise ValueError("Provide context_chunks or chunk_ids")
+        return self
+
+
+class AnswerResponse(BaseModel):
+    """Model answer grounded in the supplied chunks."""
+    answer: str
+    summary: str = ""
+    points: List[Dict[str, Any]] = Field(default_factory=list)
+    citations: List[Dict[str, Any]]
+
 class APIServer:
-    """
-    FastAPI server for the RAG application.
-    """
-    
     def __init__(self, embedding_model, vector_store, llm_interface, reranker=None):
-        """Initialize the API server with injected components"""
         self.embedding_model = embedding_model
         self.vector_store = vector_store
         self.llm_interface = llm_interface
@@ -63,7 +83,7 @@ class APIServer:
         self.app = FastAPI(
             title="ArxivLens API",
             description="API for ArxivLens",
-            version="0.1.0",
+            version=APP_VERSION,
             lifespan=self._lifespan,
         )
         self._register_routes()
@@ -78,8 +98,6 @@ class APIServer:
         yield
 
     def _register_routes(self):
-        """Register API routes"""
-
         @self.app.get("/")
         async def root():
             return {"message": "ArxivLens API is running"}
@@ -87,82 +105,26 @@ class APIServer:
         @self.app.post("/api/query", response_model=QueryResponse)
         def query(request: QueryRequest):
             try:
-                effective_top_k = min(request.top_k, MAX_QUERY_TOP_K)
                 started_at = time.perf_counter()
-                rewritten_query = self.llm_interface.rewrite_query(request.query)
-                rewrite_elapsed = time.perf_counter() - started_at
-
-                # Generate query embedding
-                embed_started_at = time.perf_counter()
-                query_embedding = self.embedding_model.embed_query(rewritten_query)
-                embed_elapsed = time.perf_counter() - embed_started_at
-
-                # Retrieve a wider set than top_k so the reranker can reorder
-                # unique papers, then cut the response back to top_k.
-                retrieval_started_at = time.perf_counter()
-                reranker_max_candidates = (
-                    self.reranker.max_candidates if self.reranker is not None else effective_top_k
-                )
-                retrieve_k = max(effective_top_k, reranker_max_candidates)
-                context_chunks = self.vector_store.query(
-                    query_embedding=query_embedding,
+                rewritten_query, rewrite_elapsed = self._rewrite_query(request.query)
+                context_chunks, facets, stage_times = self._retrieve_papers(
                     query_text=rewritten_query,
-                    n_results=retrieve_k,
-                    filters={
-                        "authors": request.authors,
-                        "categories": request.categories,
-                        "year_min": request.year_min,
-                        "year_max": request.year_max,
-                    },
+                    top_k=request.top_k,
+                    filters=self._request_filters(request),
                 )
-                retrieval_elapsed = time.perf_counter() - retrieval_started_at
-
-                rerank_started_at = time.perf_counter()
-                if self.reranker is not None:
-                    context_chunks = self.reranker.rerank(
-                        query_text=rewritten_query,
-                        candidates=context_chunks,
-                        final_top_k=effective_top_k,
-                    )
-                rerank_elapsed = time.perf_counter() - rerank_started_at
-                facets = self.vector_store.get_facets(context_chunks)
-
-                # Weak chunks are already gone. If none remain, do not ask the model to write.
-                generation_started_at = time.perf_counter()
-                if not context_chunks:
-                    answer = INSUFFICIENT_CONTEXT_ANSWER
-                    summary = answer
-                    points = []
-                    citations = []
-                    logger.info("Skipped answer generation because no chunks passed the reranker cutoff")
-                else:
-                    llm_output = self.llm_interface.generate_response(
-                        query=request.query,
-                        context_chunks=context_chunks
-                    )
-                    answer = llm_output.get("answer", "No answer returned.")
-                    summary = str(llm_output.get("summary", answer))
-                    points = llm_output.get("points") or []
-                    if not isinstance(points, list):
-                        points = []
-                    citations = llm_output.get("citations", [])
-                generation_elapsed = time.perf_counter() - generation_started_at
+                generated, generation_elapsed = self._generate_answer(request.query, context_chunks)
                 total_elapsed = time.perf_counter() - started_at
                 logger.info(
                     "Query served in %.2fs (rewrite=%.2fs, embed=%.2fs, retrieval=%.2fs, rerank=%.2fs, generation=%.2fs)",
                     total_elapsed,
                     rewrite_elapsed,
-                    embed_elapsed,
-                    retrieval_elapsed,
-                    rerank_elapsed,
+                    stage_times["embed"],
+                    stage_times["retrieval"],
+                    stage_times["rerank"],
                     generation_elapsed,
                 )
-
                 return {
-                    "answer": answer,
-                    "summary": summary,
-                    "points": points,
-                    "citations": citations,
+                    **generated,
                     "context_chunks": context_chunks,
                     "facets": facets,
                     "query": request.query,
@@ -171,6 +133,49 @@ class APIServer:
             except Exception as exc:
                 logger.exception("Query failed")
                 raise HTTPException(status_code=500, detail="Query failed.") from exc
+
+        @self.app.post("/api/search", response_model=SearchResponse)
+        def search(request: QueryRequest):
+            try:
+                started_at = time.perf_counter()
+                context_chunks, facets, stage_times = self._retrieve_papers(
+                    query_text=request.query,
+                    top_k=request.top_k,
+                    filters=self._request_filters(request),
+                )
+                total_elapsed = time.perf_counter() - started_at
+                logger.info(
+                    "Search served in %.2fs (embed=%.2fs, retrieval=%.2fs, rerank=%.2fs)",
+                    total_elapsed,
+                    stage_times["embed"],
+                    stage_times["retrieval"],
+                    stage_times["rerank"],
+                )
+                return {
+                    "context_chunks": context_chunks,
+                    "facets": facets,
+                    "query": request.query,
+                }
+            except Exception as exc:
+                logger.exception("Search failed")
+                raise HTTPException(status_code=500, detail="Search failed.") from exc
+
+        @self.app.post("/api/answer", response_model=AnswerResponse)
+        def answer(request: AnswerRequest):
+            try:
+                started_at = time.perf_counter()
+                context_chunks = self._chunks_for_answer(request)
+                generated, generation_elapsed = self._generate_answer(request.query, context_chunks)
+                total_elapsed = time.perf_counter() - started_at
+                logger.info(
+                    "Answer served in %.2fs (generation=%.2fs)",
+                    total_elapsed,
+                    generation_elapsed,
+                )
+                return generated
+            except Exception as exc:
+                logger.exception("Answer failed")
+                raise HTTPException(status_code=500, detail="Answer failed.") from exc
 
         @self.app.get("/api/health")
         async def health_check():
@@ -204,8 +209,100 @@ class APIServer:
                 logger.exception("Readiness check failed")
                 raise HTTPException(status_code=503, detail={"status": "not_ready"}) from exc
 
+    def _request_filters(self, request: QueryRequest) -> Dict[str, Any]:
+        return {
+            "authors": request.authors,
+            "categories": request.categories,
+            "year_min": request.year_min,
+            "year_max": request.year_max,
+        }
+
+    def _rewrite_query(self, query: str) -> Tuple[str, float]:
+        started_at = time.perf_counter()
+        rewritten_query = self.llm_interface.rewrite_query(query)
+        return rewritten_query, time.perf_counter() - started_at
+
+    def _retrieve_papers(
+        self,
+        query_text: str,
+        top_k: int,
+        filters: Dict[str, Any],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, float]]:
+        """Embed, retrieve, rerank, and count facets. Does not call the LLM."""
+        effective_top_k = min(top_k, MAX_QUERY_TOP_K)
+        embed_started_at = time.perf_counter()
+        query_embedding = self.embedding_model.embed_query(query_text)
+        embed_elapsed = time.perf_counter() - embed_started_at
+
+        # Retrieve a wider set than top_k so the reranker can reorder
+        # unique papers, then cut the response back to top_k.
+        retrieval_started_at = time.perf_counter()
+        reranker_max_candidates = (
+            self.reranker.max_candidates if self.reranker is not None else effective_top_k
+        )
+        retrieve_k = max(effective_top_k, reranker_max_candidates)
+        context_chunks = self.vector_store.query(
+            query_embedding=query_embedding,
+            query_text=query_text,
+            n_results=retrieve_k,
+            filters=filters,
+        )
+        retrieval_elapsed = time.perf_counter() - retrieval_started_at
+
+        rerank_started_at = time.perf_counter()
+        if self.reranker is not None:
+            context_chunks = self.reranker.rerank(
+                query_text=query_text,
+                candidates=context_chunks,
+                final_top_k=effective_top_k,
+            )
+        rerank_elapsed = time.perf_counter() - rerank_started_at
+        facets = self.vector_store.get_facets(context_chunks)
+        return context_chunks, facets, {
+            "embed": embed_elapsed,
+            "retrieval": retrieval_elapsed,
+            "rerank": rerank_elapsed,
+        }
+
+    def _chunks_for_answer(self, request: AnswerRequest) -> List[Dict[str, Any]]:
+        """Use the chunks the client sent. Look up ids only when chunks were not sent."""
+        if request.context_chunks is not None:
+            return list(request.context_chunks)
+        return self.vector_store.get_chunks_by_ids(request.chunk_ids or [])
+
+    def _generate_answer(
+        self,
+        query: str,
+        context_chunks: List[Dict[str, Any]],
+    ) -> Tuple[Dict[str, Any], float]:
+        """Ask the model for a grounded answer, or skip it when there are no chunks."""
+        generation_started_at = time.perf_counter()
+        if not context_chunks:
+            answer = INSUFFICIENT_CONTEXT_ANSWER
+            summary = answer
+            points: List[Dict[str, Any]] = []
+            citations: List[Dict[str, Any]] = []
+            logger.info("Skipped answer generation because no chunks passed the reranker cutoff")
+        else:
+            llm_output = self.llm_interface.generate_response(
+                query=query,
+                context_chunks=context_chunks,
+            )
+            answer = llm_output.get("answer", EMPTY_ANSWER)
+            summary = str(llm_output.get("summary", answer))
+            points = llm_output.get("points") or []
+            if not isinstance(points, list):
+                points = []
+            citations = llm_output.get("citations", [])
+        generation_elapsed = time.perf_counter() - generation_started_at
+        return {
+            "answer": answer,
+            "summary": summary,
+            "points": points,
+            "citations": citations,
+        }, generation_elapsed
+
     def _configure_cors(self):
-        """Configure CORS to allow frontend requests"""
         allow_origins = [origin.strip() for origin in CORS_ALLOW_ORIGINS.split(",") if origin.strip()]
 
         self.app.add_middleware(
@@ -217,5 +314,4 @@ class APIServer:
         )
 
     def run(self, host: Optional[str] = None, port: Optional[int] = None):
-        """Run the API server"""
         uvicorn.run(self.app, host=host or HOST, port=port or PORT)

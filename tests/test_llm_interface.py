@@ -172,6 +172,7 @@ def test_prompt_asks_for_summary_and_points():
     assert '"summary"' in prompt
     assert '"points"' in prompt
     assert "No markdown" in prompt
+    assert "helpful" not in prompt.lower()
 
 
 def test_query_response_accepts_points():

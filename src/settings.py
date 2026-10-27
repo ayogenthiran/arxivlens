@@ -89,6 +89,9 @@ def _port(name: str, default: int) -> int:
     return default
 
 
+# Kept in sync with [project].version in pyproject.toml.
+APP_VERSION = "0.1.0"
+
 # Paths
 DATA_DIR = env_str("DATA_DIR", "data/raw")
 OUTPUT_DIR = env_str("OUTPUT_DIR", "data/processed")
@@ -123,6 +126,38 @@ if YEAR_MIN_BOUND > YEAR_MAX_BOUND:
         f"YEAR_MIN_BOUND={YEAR_MIN_BOUND} is above YEAR_MAX_BOUND={YEAR_MAX_BOUND}. Swapping them."
     )
     YEAR_MIN_BOUND, YEAR_MAX_BOUND = YEAR_MAX_BOUND, YEAR_MIN_BOUND
+
+# Options in the category filter. A typed value can still be selected.
+COMMON_ARXIV_CATEGORIES = (
+    "cs.AI",
+    "cs.CL",
+    "cs.CV",
+    "cs.CY",
+    "cs.HC",
+    "cs.IR",
+    "cs.LG",
+    "cs.LO",
+    "cs.MA",
+    "cs.NE",
+    "cs.RO",
+    "cs.SE",
+    "cs.SI",
+    "stat.ML",
+    "stat.ME",
+    "math.ST",
+    "math.OC",
+    "eess.AS",
+    "eess.IV",
+    "eess.SP",
+    "q-bio.NC",
+    "q-fin.ST",
+    "astro-ph.CO",
+    "cond-mat.stat-mech",
+    "gr-qc",
+    "hep-th",
+    "quant-ph",
+    "econ.GN",
+)
 
 # Models
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -187,7 +222,6 @@ else:
 # is a strong ms-marco match. Anything kept but below that stays Medium.
 UI_CONFIDENCE_HIGH = env_unit_float("UI_CONFIDENCE_HIGH", 0.95)
 UI_CONFIDENCE_MEDIUM = env_unit_float("UI_CONFIDENCE_MEDIUM", 0.73)
-UI_FACET_LIMIT = env_int_min("UI_FACET_LIMIT", 5, 1)
 UI_MAX_AUTHORS_SHOWN = env_int_min("UI_MAX_AUTHORS_SHOWN", 3, 1)
 UI_PASSAGE_PREVIEW_CHARS = env_int_min("UI_PASSAGE_PREVIEW_CHARS", 280, 1)
 UI_MAX_FIGURE_LOOKUPS = env_int_min("UI_MAX_FIGURE_LOOKUPS", 3, 1)
@@ -204,6 +238,10 @@ else:
 ARXIV_ABS_BASE_URL = env_str("ARXIV_ABS_BASE_URL", "https://arxiv.org/abs").rstrip("/")
 ARXIV_HTML_BASE_URL = env_str("ARXIV_HTML_BASE_URL", "https://arxiv.org/html").rstrip("/")
 ARXIV_HOME_URL = env_str("ARXIV_HOME_URL", "https://arxiv.org").rstrip("/") + "/"
+ARXIV_USER_AGENT = env_str(
+    "ARXIV_USER_AGENT",
+    f"ArxivLens/{APP_VERSION} (local research UI; acknowledges https://arxiv.org)",
+)
 
 # Eval
 EVAL_SUPPORT_THRESHOLD = env_unit_float("EVAL_SUPPORT_THRESHOLD", 0.55)

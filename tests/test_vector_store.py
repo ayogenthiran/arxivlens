@@ -1,6 +1,7 @@
 import logging
 
 import pytest
+from chromadb.errors import NotFoundError
 
 from src.vector_store.vector_store import VectorStore
 
@@ -152,7 +153,7 @@ class _FakeClient:
 
     def get_collection(self, name):
         if self.existing is None:
-            raise RuntimeError(f"missing collection {name}")
+            raise NotFoundError(f"missing collection {name}")
         return self.existing
 
     def create_collection(self, name, metadata=None):
@@ -195,6 +196,19 @@ def test_existing_non_cosine_collection_warns_and_is_kept(store, caplog, metadat
     assert "re-ingest" in caplog.text.lower()
 
 
+def test_collection_open_does_not_treat_other_errors_as_missing(store):
+    class BrokenClient:
+        def get_collection(self, name):
+            raise RuntimeError(f"locked {name}")
+
+        def create_collection(self, name, metadata=None):
+            raise AssertionError("create_collection should not run")
+
+    store.client = BrokenClient()
+    with pytest.raises(RuntimeError, match="locked"):
+        store._get_or_create_collection()
+
+
 def test_existing_cosine_collection_does_not_warn(store, caplog):
     existing = _FakeCollection(distances=[0.2], metadata={"hnsw:space": "Cosine"})
     client = _FakeClient(existing=existing)
@@ -231,6 +245,56 @@ def test_missing_distance_scores_zero(store):
     results = store._vector_search([1.0, 0.0], n_results=1)
 
     assert results[0]["vector_score"] == 0.0
+
+
+class _GetCollection:
+    def __init__(self, rows):
+        self.rows = rows
+        self.requested = None
+
+    def get(self, ids, include):
+        self.requested = {"ids": list(ids), "include": include}
+        found = [self.rows[chunk_id] for chunk_id in reversed(list(ids)) if chunk_id in self.rows]
+        return {
+            "ids": [row["id"] for row in found],
+            "documents": [row["text"] for row in found],
+            "metadatas": [row["metadata"] for row in found],
+        }
+
+
+def test_get_chunks_by_ids_preserves_request_order_and_skips_missing(store):
+    rows = {
+        "b": {
+            "id": "b",
+            "text": "beta",
+            "metadata": {
+                "doc_id": "b-paper",
+                "authors": "Ada Lovelace and Alan Turing",
+                "year": "2020",
+            },
+        },
+        "a": {
+            "id": "a",
+            "text": "alpha",
+            "metadata": {"doc_id": "a-paper", "categories": "cs.CL cs.AI"},
+        },
+    }
+    collection = _GetCollection(rows)
+    store.collection = collection
+
+    assert store.get_chunks_by_ids([]) == []
+    assert store.get_chunks_by_ids([" ", ""]) == []
+    assert collection.requested is None
+
+    chunks = store.get_chunks_by_ids(["a", "missing", "b", "a", " "])
+
+    assert [chunk["id"] for chunk in chunks] == ["a", "b"]
+    assert chunks[0]["text"] == "alpha"
+    assert chunks[0]["metadata"]["categories"] == ["cs.CL", "cs.AI"]
+    assert chunks[1]["metadata"]["authors"] == ["Ada Lovelace", "Alan Turing"]
+    assert chunks[1]["metadata"]["year"] == 2020
+    assert collection.requested["ids"] == ["a", "missing", "b"]
+    assert collection.requested["include"] == ["documents", "metadatas"]
 
 
 def test_ranking_order_is_unchanged_between_cosine_and_l2(store):

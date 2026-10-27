@@ -1,5 +1,3 @@
-hello.py
-
 # Virtual environments
 /venv
 .venv/
@@ -21,6 +19,9 @@ build/
 # Local data, indexes, and logs. A clone does not include the corpus.
 /data/
 *.log
+
+# UI screenshots from scripts/ui_screenshots.py.
+/artifacts/
 
 # Semantic Scholar response cache. A citation-benchmark re-run reads these files
 # and does not call the network. /data/ already ignores this path.
