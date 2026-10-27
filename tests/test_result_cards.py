@@ -143,7 +143,7 @@ def test_results_layout_keeps_filters_in_the_sidebar():
     assert ">Citations<" not in source
     assert ">Facets<" not in source
     assert '"Sort by"' in source
-    assert "Add category" in source
+    assert "Add category" not in source
     assert "accept_new_options" not in source
     assert "display: none" in mobile
     assert ".paper-media" in mobile

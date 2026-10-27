@@ -49,8 +49,8 @@ QUERY = {
     "top_k": 2,
     "authors": ["Vaswani"],
     "categories": ["cs.CL"],
-    "year_min": 2017,
-    "year_max": 2019,
+    "year_min": 2023,
+    "year_max": 2024,
 }
 
 ATTENTION_CITATION = {
@@ -176,8 +176,8 @@ def test_search_never_calls_the_llm(api, monkeypatch):
     assert store.queries[0]["filters"] == {
         "authors": ["Vaswani"],
         "categories": ["cs.CL"],
-        "year_min": 2017,
-        "year_max": 2019,
+        "year_min": 2023,
+        "year_max": 2024,
     }
     assert reranker.calls[0]["final_top_k"] == 2
     assert reranker.calls[0]["query_text"] == QUERY["query"]
@@ -350,7 +350,7 @@ def test_answer_requires_chunks_or_ids(api):
 def test_search_rejects_an_inverted_year_range(api):
     client, *_rest = api
 
-    response = client.post("/api/search", json={"query": "attention", "year_min": 2020, "year_max": 2010})
+    response = client.post("/api/search", json={"query": "attention", "year_min": 2024, "year_max": 2023})
 
     assert response.status_code == 422
 

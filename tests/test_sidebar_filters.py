@@ -43,16 +43,16 @@ def test_active_filter_count_covers_categories_published_range_and_author():
     assert active_filter_count(any_time) == 0
 
     from_year = _empty_filters()
-    from_year["year_min"] = 2018
+    from_year["year_min"] = 2024
     assert active_filter_count(from_year) == 1
     until_year = _empty_filters()
-    until_year["year_max"] = 2020
+    until_year["year_max"] = 2023
     assert active_filter_count(until_year) == 1
 
     all_three = {
         "categories": ["cs.LG"],
         "authors": ["LeCun"],
-        "year_min": 2019,
+        "year_min": 2024,
         "year_max": 2024,
     }
     assert active_filter_count(all_three) == 3

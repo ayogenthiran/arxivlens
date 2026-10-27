@@ -29,7 +29,7 @@ def test_round_trip_keeps_query_top_k_and_filters():
     filters = {
         "categories": ["cs.CL", "cs.AI"],
         "authors": ["Yann LeCun"],
-        "year_min": 2019,
+        "year_min": 2023,
         "year_max": 2024,
     }
     encoded = encode_search_params("  reasoning in language models  ", 8, filters)
@@ -116,13 +116,13 @@ def test_present_params_match_encoded_search_after_spacing_normalization():
     encoded = encode_search_params(
         "topic",
         5,
-        {"categories": ["cs.CL", "cs.AI"], "authors": [], "year_min": 2020, "year_max": None},
+        {"categories": ["cs.CL", "cs.AI"], "authors": [], "year_min": 2024, "year_max": None},
     )
     current = {
         "query": "topic",
         "top_k": "5",
         "categories": "cs.CL,cs.AI",
-        "year_min": "2020",
+        "year_min": "2024",
     }
 
     assert present_search_params(current) == encoded

@@ -58,9 +58,6 @@ CATEGORIES_KEY = "categories_input"
 AUTHORS_KEY = "authors_input"
 YEAR_RANGE_KEY = "year_range_input"
 SORT_KEY = "sort_by_input"
-CATEGORY_CUSTOM_KEY = "category_custom_input"
-PENDING_CATEGORIES_KEY = "pending_categories"
-CLEAR_CATEGORY_CUSTOM_KEY = "clear_category_custom"
 SEARCH_HYDRATED_KEY = "search_params_hydrated"
 SEARCH_RESULT_KEY = "search_result"
 APPLIED_FILTERS_KEY = "applied_search_filters"
@@ -730,7 +727,6 @@ def _ensure_form_state() -> None:
     st.session_state.setdefault(AUTHORS_KEY, "")
     st.session_state.setdefault(YEAR_RANGE_KEY, (YEAR_MIN_BOUND, YEAR_MAX_BOUND))
     st.session_state.setdefault(SORT_KEY, SORT_RELEVANCE)
-    st.session_state.setdefault(CATEGORY_CUSTOM_KEY, "")
     categories = st.session_state.get(CATEGORIES_KEY)
     if isinstance(categories, str):
         st.session_state[CATEGORIES_KEY] = [part.strip() for part in categories.split(",") if part.strip()]
@@ -743,24 +739,6 @@ def _typed_categories(raw: str) -> list[str]:
         if text and text not in found:
             found.append(text)
     return found
-
-
-def _consume_typed_categories() -> None:
-    """Move a typed category into the multiselect before that widget is created."""
-    if st.session_state.pop(CLEAR_CATEGORY_CUSTOM_KEY, False):
-        st.session_state[CATEGORY_CUSTOM_KEY] = ""
-    pending = st.session_state.pop(PENDING_CATEGORIES_KEY, None)
-    if not pending:
-        return
-    selected = st.session_state.get(CATEGORIES_KEY) or []
-    if isinstance(selected, str):
-        selected = _typed_categories(selected)
-    else:
-        selected = [str(value).strip() for value in selected if str(value).strip()]
-    for value in pending:
-        if value not in selected:
-            selected.append(value)
-    st.session_state[CATEGORIES_KEY] = selected
 
 
 def _hydrate_search_from_query_params() -> None:
@@ -815,8 +793,6 @@ def _on_clear_all_filters() -> None:
         categories_key=CATEGORIES_KEY,
         authors_key=AUTHORS_KEY,
         year_key=YEAR_RANGE_KEY,
-        extra_blank_keys=(CATEGORY_CUSTOM_KEY,),
-        pop_keys=(PENDING_CATEGORIES_KEY, CLEAR_CATEGORY_CUSTOM_KEY),
     )
 
 
@@ -842,7 +818,6 @@ def _sidebar_filter_state() -> dict:
 
 def render_sidebar() -> tuple[int, dict]:
     _ensure_form_state()
-    _consume_typed_categories()
     with st.sidebar:
         heading = filters_heading(active_filter_count(_sidebar_filter_state()))
         title_col, clear_col = st.columns([1.7, 1], vertical_alignment="center", gap="small")
@@ -857,17 +832,6 @@ def render_sidebar() -> tuple[int, dict]:
             key=CATEGORIES_KEY,
             placeholder="Choose categories",
         )
-        custom = st.text_input(
-            "Add category",
-            key=CATEGORY_CUSTOM_KEY,
-            placeholder="cs.IR",
-            help="Any arXiv category code. It is added to Categories.",
-        )
-        typed = [value for value in _typed_categories(custom) if value not in categories]
-        if typed:
-            st.session_state[PENDING_CATEGORIES_KEY] = typed
-            st.session_state[CLEAR_CATEGORY_CUSTOM_KEY] = True
-            st.rerun()
         year_range = st.slider(
             "Year",
             min_value=YEAR_MIN_BOUND,
@@ -1035,9 +999,6 @@ def _apply_example(index: int) -> None:
     st.session_state[CATEGORIES_KEY] = list(filters["categories"])
     st.session_state[AUTHORS_KEY] = ", ".join(filters["authors"])
     st.session_state[YEAR_RANGE_KEY] = _year_range_value(filters["year_min"], filters["year_max"])
-    st.session_state[CATEGORY_CUSTOM_KEY] = ""
-    st.session_state.pop(PENDING_CATEGORIES_KEY, None)
-    st.session_state.pop(CLEAR_CATEGORY_CUSTOM_KEY, None)
     st.session_state["auto_query"] = str(example["query"])
     st.session_state["pending_example_filters"] = filters
 

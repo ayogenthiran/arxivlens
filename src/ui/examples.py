@@ -1,8 +1,8 @@
 """Empty-state example searches.
 
 Each example is a query plus optional sidebar presets. ``published`` values such
-as ``Since 2025`` become a year filter. The chip shows that preset as a short
-suffix, for example ``· since 2025``.
+as ``Since 2026`` become a year filter. The chip shows that preset as a short
+suffix, for example ``· since 2026``.
 """
 
 from collections.abc import Mapping
@@ -23,7 +23,7 @@ EXAMPLE_QUESTIONS: list[dict[str, Any]] = [
     {
         "label": "Evaluating LLM reasoning without benchmark contamination",
         "query": "Evaluating LLM reasoning without benchmark contamination",
-        "filters": {"published": "Since 2025"},
+        "filters": {"published": "Since 2026"},
     },
     {
         "label": "Retrieval-augmented generation for scientific question answering",
@@ -34,7 +34,7 @@ EXAMPLE_QUESTIONS: list[dict[str, Any]] = [
 
 
 def example_filter_suffix(filters: Mapping[str, Any] | None) -> str:
-    """Short chip suffix for a preset, such as ``since 2025``."""
+    """Short chip suffix for a preset, such as ``since 2026``."""
     published = _published_text(filters)
     if not published:
         return ""
